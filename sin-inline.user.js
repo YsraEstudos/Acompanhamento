@@ -1,15 +1,15 @@
 // ==UserScript==
 // @name         KM SIN Sidebar
 // @namespace    http://tampermonkey.net/
-// @version      1.0.2
+// @version      1.0.3
 // @author       OpenAI Codex
 // @description  Exibe o Acompanhamento da SIN inline na página do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
-// @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
-// @match        *://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
-// @match        *://*.klassmatt.com.br/*ITEM_Edita.aspx*
-// @match        *://klassmatt.com.br/*SIN_Item_Edita.aspx*
-// @match        *://klassmatt.com.br/*ITEM_Edita.aspx*
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.3/sin-inline.user.js
+// @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
+// @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
+// @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
+// @match        https://klassmatt.com.br/*SIN_Item_Edita.aspx*
+// @match        https://klassmatt.com.br/*ITEM_Edita.aspx*
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
 // @grant        unsafeWindow
@@ -122,8 +122,12 @@
     if (!contentType) return true;
     return /text\/html|application\/xhtml/i.test(contentType);
   }
+  function resolveAbsoluteUrl(rawUrl, fallbackUrl) {
+    return new URL(rawUrl || fallbackUrl, fallbackUrl);
+  }
   async function fetchHtml(url, signal) {
     try {
+      const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
       const response = await fetch(url, {
         credentials: "include",
         cache: "no-store",
@@ -138,10 +142,14 @@
       }
       const buffer = await response.arrayBuffer();
       const html = decodeHttpText(buffer, contentType);
+      const responseUrl = resolveAbsoluteUrl(response.url || requestedUrl.toString(), requestedUrl.toString());
+      if (responseUrl.origin !== requestedUrl.origin) {
+        throw new Error(`Redirecionamento bloqueado para origem inesperada: ${responseUrl.origin}`);
+      }
       return {
         html,
-        responseUrl: response.url,
-        wasRedirected: response.redirected || Boolean(response.url) && response.url !== url,
+        responseUrl: responseUrl.toString(),
+        wasRedirected: response.redirected || responseUrl.toString() !== requestedUrl.toString(),
         contentType
       };
     } catch (error) {
@@ -186,7 +194,7 @@
     if (!input) return null;
     try {
       const base = new URL(baseUrl, window.location.href);
-      const absolute = new URL(input, baseUrl);
+      const absolute = new URL(input, base);
       if (!/\/Historico\.aspx$/i.test(absolute.pathname)) {
         return null;
       }
@@ -199,6 +207,7 @@
       const k = getParamInsensitive(absolute, "k");
       return {
         absoluteUrl: absolute.toString(),
+        origin: absolute.origin,
         pathname: absolute.pathname,
         source,
         id,
@@ -240,6 +249,9 @@
     }
     if (expected.pathname.toLowerCase() !== actual.pathname.toLowerCase()) {
       reasons.push(`Caminho inesperado no retorno: esperado ${expected.pathname}, recebido ${actual.pathname}.`);
+    }
+    if (expected.origin.toLowerCase() !== actual.origin.toLowerCase()) {
+      reasons.push(`Origem divergente: esperado ${expected.origin}, recebido ${actual.origin}.`);
     }
     if (!actual.id) {
       reasons.push("A resposta do historico nao informa o Id da SIN no form[action].");
@@ -471,9 +483,9 @@
       parserKind: "strict"
     };
   }
-  function finalizeParse(doc, build) {
+  function finalizeParse(doc, build, baseUrl = window.location.href) {
     const base = consolidate(build.events);
-    const documentIdentity = extractHistoryIdentityFromDocument(doc);
+    const documentIdentity = extractHistoryIdentityFromDocument(doc, baseUrl);
     const warnings = [...build.warnings];
     let anomalyCount = build.anomalyCount;
     if (!documentIdentity?.id) {
@@ -537,8 +549,8 @@
       parserKind: "strict"
     };
   }
-  function parseHistoryStrict(doc) {
-    return finalizeParse(doc, parseHistoryStrictBuild(doc));
+  function parseHistoryStrict(doc, baseUrl = window.location.href) {
+    return finalizeParse(doc, parseHistoryStrictBuild(doc), baseUrl);
   }
   const SETTINGS_KEY = "km_sin_sidebar_settings_v1";
   const SETTINGS_CHANGED_EVENT = "km-sin-sidebar-settings-changed";
@@ -571,13 +583,59 @@
       detail: settings
     }));
   }
-  const PASSTHROUGH_TAGS = new Set(["B", "STRONG", "I", "EM", "U", "BR", "SPAN"]);
+  const INLINE_PASSTHROUGH_TAGS = new Set(["B", "STRONG", "I", "EM", "U", "BR", "SPAN"]);
+  const SNAPSHOT_PASSTHROUGH_TAGS = new Set([
+    "ARTICLE",
+    "B",
+    "BLOCKQUOTE",
+    "BR",
+    "CODE",
+    "DIV",
+    "EM",
+    "FIELDSET",
+    "H1",
+    "H2",
+    "H3",
+    "H4",
+    "H5",
+    "H6",
+    "HR",
+    "I",
+    "LEGEND",
+    "LI",
+    "OL",
+    "P",
+    "PRE",
+    "SECTION",
+    "SMALL",
+    "SPAN",
+    "STRONG",
+    "TABLE",
+    "TBODY",
+    "TD",
+    "TH",
+    "THEAD",
+    "TR",
+    "U",
+    "UL"
+  ]);
   function escapeHtml(value) {
     const div = document.createElement("div");
     div.textContent = value ?? "";
     return div.innerHTML;
   }
-  function sanitizeNode(node, baseUrl) {
+  function resolveTrustedSameOriginUrl(href, baseUrl) {
+    try {
+      const base = new URL(baseUrl, window.location.href);
+      const url = new URL(href, base);
+      if (url.origin !== base.origin) return null;
+      if (url.protocol.toLowerCase() !== "https:") return null;
+      return url;
+    } catch {
+      return null;
+    }
+  }
+  function sanitizeNode(node, baseUrl, options) {
     if (node.nodeType === Node.TEXT_NODE) {
       return document.createTextNode(node.textContent ?? "");
     }
@@ -592,27 +650,23 @@
       if (!href || /^javascript:/i.test(href)) {
         return document.createTextNode(text);
       }
-      try {
-        const url = new URL(href, baseUrl);
-        if (!/^https?:$/i.test(url.protocol)) {
-          return document.createTextNode(text);
-        }
-        const anchor = document.createElement("a");
-        anchor.href = url.toString();
-        anchor.target = "_blank";
-        anchor.rel = "noreferrer noopener";
-        anchor.textContent = text;
-        return anchor;
-      } catch {
+      const url = resolveTrustedSameOriginUrl(href, baseUrl);
+      if (!url) {
         return document.createTextNode(text);
       }
+      const anchor = document.createElement("a");
+      anchor.href = url.toString();
+      anchor.target = "_blank";
+      anchor.rel = "noreferrer noopener";
+      anchor.textContent = text;
+      return anchor;
     }
     const fragment = document.createDocumentFragment();
     for (const child of node.childNodes) {
-      const sanitizedChild = sanitizeNode(child, baseUrl);
+      const sanitizedChild = sanitizeNode(child, baseUrl, options);
       if (sanitizedChild) fragment.appendChild(sanitizedChild);
     }
-    if (!PASSTHROUGH_TAGS.has(tag)) {
+    if (!options.passthroughTags.has(tag)) {
       return fragment;
     }
     if (tag === "BR") {
@@ -631,56 +685,92 @@
     template.innerHTML = input;
     const container = document.createElement("div");
     for (const child of template.content.childNodes) {
-      const sanitized = sanitizeNode(child, baseUrl);
+      const sanitized = sanitizeNode(child, baseUrl, {
+        passthroughTags: INLINE_PASSTHROUGH_TAGS
+      });
+      if (sanitized) container.appendChild(sanitized);
+    }
+    return container.innerHTML;
+  }
+  function sanitizeSnapshotHtml(value, baseUrl = window.location.href) {
+    const input = String(value ?? "").trim();
+    if (!input) return "";
+    const doc = new DOMParser().parseFromString(input, "text/html");
+    const container = document.createElement("div");
+    const root = doc.body ?? doc.documentElement;
+    for (const child of root.childNodes) {
+      const sanitized = sanitizeNode(child, baseUrl, {
+        passthroughTags: SNAPSHOT_PASSTHROUGH_TAGS
+      });
       if (sanitized) container.appendChild(sanitized);
     }
     return container.innerHTML;
   }
   const STYLE_ID = "km-sin-sidebar-style";
   const LAYOUT_SELECTOR = '.km-sin-layout[data-km-sin-root="1"]';
-  function ensureHead(doc) {
-    if (doc.head) return doc.head;
-    const head = doc.createElement("head");
-    if (doc.documentElement.firstChild) {
-      doc.documentElement.insertBefore(head, doc.documentElement.firstChild);
-    } else {
-      doc.documentElement.appendChild(head);
-    }
-    return head;
-  }
-  function buildInlineSnapshotSrcdoc(rawHtml, baseUrl) {
-    const doc = new DOMParser().parseFromString(rawHtml, "text/html");
-    const head = ensureHead(doc);
-    head.querySelector("base")?.remove();
-    if (!head.querySelector("meta[charset]")) {
-      const charsetMeta = doc.createElement("meta");
-      charsetMeta.setAttribute("charset", "utf-8");
-      head.prepend(charsetMeta);
-    }
-    const base = doc.createElement("base");
-    base.href = baseUrl;
-    head.prepend(base);
-    const colorScheme = doc.createElement("meta");
-    colorScheme.name = "color-scheme";
-    colorScheme.content = "light only";
-    head.prepend(colorScheme);
-    const darkReaderLock = doc.createElement("meta");
-    darkReaderLock.name = "darkreader-lock";
-    head.prepend(darkReaderLock);
-    const style = doc.createElement("style");
-    style.textContent = `
-    :root {
-      color-scheme: light only !important;
-    }
-
-    html, body {
-      background: #ffffff !important;
-      color: #111827 !important;
-    }
-  `;
-    head.prepend(style);
+  function buildInlineSnapshotSrcdoc(rawHtml, baseUrl, historyUrl) {
+    const snapshotHtml = rawHtml ? sanitizeSnapshotHtml(rawHtml, baseUrl) : `<p>Nenhum snapshot seguro estava disponivel para este historico.</p><p><a href="${escapeHtml(historyUrl)}" target="_blank" rel="noreferrer noopener">Abrir historico nativo em nova aba</a></p>`;
     return `<!DOCTYPE html>
-${doc.documentElement.outerHTML}`;
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8">
+    <meta name="color-scheme" content="light only">
+    <meta name="darkreader-lock">
+    <style>
+      :root { color-scheme: light only !important; }
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #ffffff !important;
+        color: #111827 !important;
+        font: 14px/1.55 Segoe UI, Arial, sans-serif;
+      }
+      body {
+        padding: 16px;
+      }
+      .km-sin-snapshot-note {
+        margin: 0 0 16px;
+        padding: 12px 14px;
+        border-radius: 10px;
+        border: 1px solid #cbd5e1;
+        background: #f8fafc;
+        color: #334155;
+        font-size: 13px;
+      }
+      .km-sin-snapshot {
+        display: grid;
+        gap: 12px;
+        word-break: break-word;
+      }
+      .km-sin-snapshot a {
+        color: #0f4c81;
+      }
+      .km-sin-snapshot table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .km-sin-snapshot td,
+      .km-sin-snapshot th {
+        border: 1px solid #d4d8de;
+        padding: 6px 8px;
+        vertical-align: top;
+      }
+      .km-sin-snapshot fieldset {
+        border: 1px solid #d4d8de;
+        border-radius: 10px;
+        padding: 12px;
+      }
+      .km-sin-snapshot pre,
+      .km-sin-snapshot code {
+        white-space: pre-wrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="km-sin-snapshot-note">Visualizacao segura em modo somente leitura. Scripts, formularios, imagens e recursos externos do HTML original foram removidos.</div>
+    <main class="km-sin-snapshot">${snapshotHtml || "<p>O historico nao trouxe conteudo visual seguro para exibir inline.</p>"}</main>
+  </body>
+</html>`;
   }
   function injectStyles() {
     if (document.getElementById(STYLE_ID)) return;
@@ -854,14 +944,14 @@ ${doc.documentElement.outerHTML}`;
     }
     const empty = document.createElement("div");
     empty.className = "km-sin-empty";
-    empty.textContent = "Nao foi possivel interpretar o HTML deste historico. Se precisar, carregue o fallback inline manualmente.";
+    empty.textContent = "Nao foi possivel interpretar o HTML deste historico. Se precisar, carregue uma visualizacao segura em modo somente leitura.";
     const actions = document.createElement("div");
     actions.className = "km-sin-empty-actions";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "km-sin-link-btn";
     button.dataset.act = "load-fallback";
-    button.textContent = "Carregar fallback inline";
+    button.textContent = "Carregar visualizacao segura";
     button.onclick = () => {
       button.disabled = true;
       onDemandLoad();
@@ -887,12 +977,8 @@ ${doc.documentElement.outerHTML}`;
     iframe.setAttribute("data-darkreader-ignore", "");
     iframe.setAttribute("data-darkreader-skip", "");
     iframe.title = "Historico da SIN (isolado)";
-    if (rawHtml) {
-      iframe.src = "about:blank";
-      iframe.srcdoc = buildInlineSnapshotSrcdoc(rawHtml, baseUrl || url);
-    } else {
-      iframe.src = url;
-    }
+    iframe.src = "about:blank";
+    iframe.srcdoc = buildInlineSnapshotSrcdoc(rawHtml, baseUrl || url, url);
     fragment.appendChild(iframe);
     shell.bodyEl.replaceChildren(fragment);
   }
@@ -1063,6 +1149,10 @@ ${doc.documentElement.outerHTML}`;
     ].filter(Boolean);
     return parts.join(" ");
   }
+  function isSecurityBlockedError(error) {
+    if (!(error instanceof Error)) return false;
+    return /origem inesperada|redirecionamento bloqueado/i.test(error.message);
+  }
   function classifyErrorForUser(error, wasRedirected) {
     if (error instanceof Error) {
       const msg = error.message.toLowerCase();
@@ -1093,7 +1183,13 @@ ${doc.documentElement.outerHTML}`;
       if (/content-type/i.test(msg)) {
         return {
           diagnostic: "O servidor retornou um conteudo inesperado (nao HTML).",
-          actionHint: "Use o botao Ver inline para abrir o historico em iframe."
+          actionHint: "Use o botao Ver inline para abrir uma visualizacao segura do historico."
+        };
+      }
+      if (/origem inesperada|redirecionamento bloqueado/i.test(msg)) {
+        return {
+          diagnostic: "O carregamento foi bloqueado porque o servidor tentou responder por uma origem inesperada.",
+          actionHint: "Recarregue a pagina (F5) e confirme se o link nativo do historico ainda aponta para o Klassmatt."
         };
       }
     }
@@ -1148,7 +1244,7 @@ ${doc.documentElement.outerHTML}`;
       const safeHistoryUrl = getSafeHistoryUrl(context.historyUrl);
       if (shell && safeHistoryUrl) {
         this.abortActiveFetch();
-        setShellState(shell, "Exibindo historico nativo (iframe)...", "default");
+        setShellState(shell, "Exibindo visualizacao segura do historico...", "default");
         renderIframeFallback(
           shell,
           safeHistoryUrl,
@@ -1347,7 +1443,7 @@ ${doc.documentElement.outerHTML}`;
       if (result.mode === "blocked" && getSafeHistoryUrl(context.historyUrl)) {
         setShellState(shell, "Historico bloqueado por seguranca.", "warning");
         renderIframeFallbackPrompt(shell, result.diagnostic, () => {
-          setShellState(shell, "Carregando fallback inline...", "warning");
+          setShellState(shell, "Carregando visualizacao segura...", "warning");
           renderIframeFallback(
             shell,
             safeHistoryUrl,
@@ -1364,9 +1460,9 @@ ${doc.documentElement.outerHTML}`;
         return;
       }
       if (result.mode === "iframe" && getSafeHistoryUrl(context.historyUrl)) {
-        setShellState(shell, "Formato nao reconhecido. Fallback disponivel sob demanda.", "warning");
+        setShellState(shell, "Formato nao reconhecido. Visualizacao segura disponivel sob demanda.", "warning");
         renderIframeFallbackPrompt(shell, result.diagnostic, () => {
-          setShellState(shell, "Carregando fallback inline...", "warning");
+          setShellState(shell, "Carregando visualizacao segura...", "warning");
           renderIframeFallback(
             shell,
             safeHistoryUrl,
@@ -1454,7 +1550,7 @@ ${doc.documentElement.outerHTML}`;
               actionHint: "Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar de novo."
             };
           }
-          const parsed = parseHistoryStrict(doc);
+          const parsed = parseHistoryStrict(doc, fetchResult.responseUrl);
           const inlineBaseUrl = fetchResult.responseUrl || historyUrl;
           const identityValidation = validateHistoryIdentity(context.historyIdentity, parsed.documentIdentity);
           if (!identityValidation.isValid) {
@@ -1521,6 +1617,15 @@ ${doc.documentElement.outerHTML}`;
           return result;
         } catch (error) {
           if (isAbortError(error)) throw error;
+          if (isSecurityBlockedError(error)) {
+            const classified2 = classifyErrorForUser(error);
+            return {
+              mode: "blocked",
+              timeline: [],
+              diagnostic: classified2.diagnostic,
+              actionHint: classified2.actionHint
+            };
+          }
           const classified = classifyErrorForUser(error);
           return {
             mode: historyUrl ? "iframe" : "error",
@@ -1747,7 +1852,8 @@ ${doc.documentElement.outerHTML}`;
   function isSupportedItemPath(pathname) {
     return SUPPORTED_ITEM_PATHS.some((pattern) => pattern.test(String(pathname || "")));
   }
-  function shouldBootstrapSinSidebar(pathname = window.location.pathname, doc = document) {
+  function shouldBootstrapSinSidebar(pathname = window.location.pathname, doc = document, protocol = window.location.protocol) {
+    if (String(protocol || "").toLowerCase() !== "https:") return false;
     if (!isSupportedItemPath(pathname)) return false;
     return Boolean(doc.querySelector(CONTEXT_HINT_SELECTOR));
   }
