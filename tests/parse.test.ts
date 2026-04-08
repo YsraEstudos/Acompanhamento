@@ -1,0 +1,151 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { parseHistory } from '../src/parse';
+
+const fixturesDir = path.resolve(process.cwd(), 'tests', 'fixtures');
+
+function parseFixture(name: string) {
+  const html = fs.readFileSync(path.join(fixturesDir, name), 'utf8');
+  const doc = new DOMParser().parseFromString(html, 'text/html');
+  return parseHistory(doc);
+}
+
+describe('history parser', () => {
+  it('parses strict history HTML and keeps yellow comments', () => {
+    const result = parseFixture('hist-strict.html');
+
+    expect(result.timeline).toHaveLength(2);
+    expect(result.timeline[0].stage).toBe('CATALOGACAO');
+    expect(result.timeline[0].yellowComments).toEqual(['USAR PDM BRINDE. ATRIBUTO USO: AQUA']);
+    expect(result.timeline[0].hasAttentionHighlight).toBe(false);
+    expect(result.timeline[0].descricaoHtml).not.toContain('USAR PDM BRINDE');
+    expect(result.summary.totalTransicoes).toBe(1);
+    expect(result.confidence).toBe('high');
+    expect(result.documentIdentity?.id).toBe('209355');
+    expect(result.warnings).toEqual([]);
+  });
+
+  it('falls back to the loose parser without splitting multiline changes into fake events', () => {
+    const result = parseFixture('hist-loose.html');
+
+    expect(result.timeline).toHaveLength(4);
+    expect(result.timeline[0].descricao).toContain('MATERIAL CORPO de [] para [ACO]');
+    expect(result.timeline[1].stage).toBe('FINALIZAÇÃO');
+    expect(result.timeline[2].stage).toBe('APROVACAO-KLASSMATT');
+  });
+
+  it('marks attention highlights for NCM, NBS, lei and matching codes', () => {
+    const doc = new DOMParser().parseFromString(`
+      <fieldset class="hist-fieldset">
+        <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
+        <div class="row"><a id="hlinkUsuario">ANA.TESTE*</a></div>
+        <div class="row result">
+          <span id="lblHora">10:00:00</span>
+          <span id="lblDescricao">Validar lei e NCM 1234.56.78</span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">10:05:00</span>
+          <span id="lblDescricao">Analisar NBS<br><span style="background-color: yellow">codigo 12345678</span></span>
+        </div>
+      </fieldset>
+    `, 'text/html');
+
+    const result = parseHistory(doc);
+
+    expect(result.timeline[0].hasAttentionHighlight).toBe(true);
+    expect(result.timeline[0].attentionMatches).toEqual(['LEI', 'NCM', '1234.56.78']);
+    expect(result.timeline[1].hasAttentionHighlight).toBe(true);
+    expect(result.timeline[1].attentionMatches).toEqual(['NBS', '12345678']);
+  });
+
+  it('does not mark short numbers as attention highlights', () => {
+    const doc = new DOMParser().parseFromString(`
+      <fieldset class="hist-fieldset">
+        <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
+        <div class="row"><a id="hlinkUsuario">ANA.TESTE*</a></div>
+        <div class="row result">
+          <span id="lblHora">10:00:00</span>
+          <span id="lblDescricao">Revisar item 1234 e norma interna</span>
+        </div>
+      </fieldset>
+    `, 'text/html');
+
+    const result = parseHistory(doc);
+
+    expect(result.timeline[0].hasAttentionHighlight).toBe(false);
+    expect(result.timeline[0].attentionMatches).toEqual([]);
+  });
+
+  it('parses the real 84429 fixture and keeps only the two correct yellow comments', () => {
+    const result = parseFixture('hist-real-84429.html');
+
+    const yellowOnly = result.timeline.filter((event) => event.yellowComments.length > 0);
+
+    expect(result.confidence).toBe('high');
+    expect(result.documentIdentity?.id).toBe('84429');
+    expect(result.documentIdentity?.k).toBe('75423vt11qxrtyxxcokhwmo5v3l2_1620');
+    expect(yellowOnly).toHaveLength(2);
+    expect(yellowOnly[0].hora).toBe('16:16:34');
+    expect(yellowOnly[0].stage).toBe('CATALOGACAO');
+    expect(yellowOnly[0].yellowComments).toEqual([
+      'https://www.mercadolivre.com.br/kit-de-impacto-do-macaco-eletrico-hidraulico-6-em-1--12v-5t/up/MLBU3669022538'
+    ]);
+    expect(yellowOnly[1].hora).toBe('16:15:04');
+    expect(yellowOnly[1].stage).toBe('APROVACAO-REVISAO');
+    expect(yellowOnly[1].yellowComments).toEqual([
+      'PREZADOS, PARA O CORRETO CADASTRO, FAVOR INFORMAR A COMPOSICAO DO CONJUNTO OU ANEXAR FICHA DE DADOS DO ITEM.'
+    ]);
+    expect(JSON.stringify(yellowOnly)).not.toContain('pd 20200');
+    expect(JSON.stringify(yellowOnly)).not.toContain('REAVALIACAO-CATALOG');
+  });
+
+  it('ignores colored spans that are not yellow-note highlights', () => {
+    const doc = new DOMParser().parseFromString(`
+      <form action="./Historico.aspx?source=SIN&Id=123456&SomenteLeitura=1">
+        <fieldset class="hist-fieldset">
+          <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
+          <div class="row"><a id="hlinkUsuario">ANA.TESTE*</a></div>
+          <div class="row result">
+            <span id="lblHora">10:00:00</span>
+            <span id="lblDescricao">
+              Solicitacao enviada para CATALOGACAO
+              <br>
+              <span style="background-color: lightblue; --darkreader-inline-bgcolor: var(--darkreader-background-add8e6, #1b4958);">nao e comentario amarelo</span>
+            </span>
+          </div>
+        </fieldset>
+      </form>
+    `, 'text/html');
+
+    const result = parseHistory(doc);
+
+    expect(result.confidence).toBe('high');
+    expect(result.timeline[0].yellowComments).toEqual([]);
+    expect(result.timeline[0].descricao).toContain('nao e comentario amarelo');
+  });
+
+  it('accepts a yellow-only description as a valid acompanhamento comment', () => {
+    const doc = new DOMParser().parseFromString(`
+      <form action="./Historico.aspx?source=SIN&Id=84405&SomenteLeitura=1">
+        <fieldset class="hist-fieldset">
+          <legend class="hist-legend">quinta-feira, 2 de abril de 2026</legend>
+          <div class="row"><a id="hlinkUsuario">C011000518</a></div>
+          <div class="row result">
+            <span id="lblHora">08:24:16</span>
+            <span id="lblDescricao">
+              <span style="color: black; background-color: Yellow;"><strong>OK</strong></span>
+            </span>
+          </div>
+        </fieldset>
+      </form>
+    `, 'text/html');
+
+    const result = parseHistory(doc);
+
+    expect(result.confidence).toBe('high');
+    expect(result.warnings).toEqual([]);
+    expect(result.timeline).toHaveLength(1);
+    expect(result.timeline[0].descricao).toBe('');
+    expect(result.timeline[0].yellowComments).toEqual(['OK']);
+  });
+});
