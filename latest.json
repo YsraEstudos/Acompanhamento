@@ -1,7 +1,7 @@
 {
-  "version": "1.0.7",
+  "version": "1.0.8",
   "installUrl": "https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js",
   "updateUrl": "https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js",
-  "downloadUrl": "https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.7/sin-inline.user.js",
-  "sha256": "47cfd5d54b2e801e829a3a7fb7954849f3c509caf4e5fed50e8649cd485a610b"
+  "downloadUrl": "https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.8/sin-inline.user.js",
+  "sha256": "73e2575792464b1b42ab4f77545bf01e3b7ed95a5f5262e85a42991297d9d67e"
 }

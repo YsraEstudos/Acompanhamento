@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         KM SIN Sidebar
+// @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.3
+// @version      1.0.8
 // @author       OpenAI Codex
-// @description  Exibe o Acompanhamento da SIN inline na página do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.3/sin-inline.user.js
+// @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.8/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -561,8 +561,11 @@
   function normalizeTimelineMode(value) {
     return value === "yellow-only" ? "yellow-only" : "all";
   }
-  function getAlwaysOpenToggleLabel(alwaysOpen) {
+  function getAlwaysOpenMenuLabel(alwaysOpen) {
     return alwaysOpen ? "Desativar acompanhamento sempre visivel" : "Ativar acompanhamento sempre visivel";
+  }
+  function getInlinePanelToggleLabel(panelOpen) {
+    return panelOpen ? "Ocultar painel" : "Mostrar painel";
   }
   function loadSettings() {
     try {
@@ -776,7 +779,7 @@
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement("style");
     style.id = STYLE_ID;
-    style.textContent = '.km-sin-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,360px);gap:20px;align-items:start;margin-top:12px}.km-sin-layout.km-sin-collapsed{grid-template-columns:minmax(0,1fr)}.km-sin-main,.km-sin-aside{min-width:0;min-height:0}.km-sin-aside[hidden]{display:none!important}.km-sin-card{position:sticky;top:12px;display:flex;flex-direction:column;max-height:calc(100vh - 24px);background:#fff;border:1px solid #d4d8de;border-radius:12px;box-shadow:0 12px 28px rgba(15,23,42,.08);overflow:hidden}.km-sin-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 16px 12px;border-bottom:1px solid #e7eaee;background:linear-gradient(180deg,#f8fafc 0,#fff 100%)}.km-sin-label{margin:0 0 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#52606d}.km-sin-title{margin:0;font-size:18px;line-height:1.2;color:#1f2937}.km-sin-meta,.km-sin-state{padding:0 16px;color:#52606d;font-size:12px}.km-sin-meta{padding-top:12px}.km-sin-state{padding-top:8px;padding-bottom:8px}.km-sin-state.is-error{color:#b42318}.km-sin-state.is-warning{color:#9a6700}.km-sin-actions{display:flex;gap:8px;align-items:center;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}.km-sin-link-btn,.km-sin-toggle,.km-sin-mode-btn{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}.km-sin-link-btn:hover,.km-sin-toggle:hover,.km-sin-mode-btn:hover{background:#f8fafc;border-color:#94a3b8}.km-sin-link-btn:disabled{cursor:default;opacity:.65}.km-sin-mode-btn{border-color:#bfd7ff;color:#0f4c81;background:#eef6ff}.km-sin-mode-btn[data-mode="yellow-only"]{background:#fff4e5;border-color:#f5c67a;color:#8a4b08}.km-sin-body{flex:1 1 auto;min-height:0;padding:12px 16px 16px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;touch-action:pan-y}.km-sin-empty{padding:14px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;color:#52606d;font-size:13px}.km-sin-empty-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.km-sin-banner{margin-bottom:12px;padding:12px 14px;border-radius:10px;background:#fff4e5;border:1px solid #f5c67a;color:#8a4b08;font-size:13px}.km-sin-group+.km-sin-group{margin-top:16px}.km-sin-day{margin:0 0 10px;font-size:13px;font-weight:700;color:#334155}.km-sin-list,.km-sin-notes{display:grid;gap:10px}.km-sin-item{border:1px solid #e5e7eb;border-radius:10px;background:#fff;padding:12px}.km-sin-item.is-attention{border-color:#f1a4a4;background:linear-gradient(180deg,#fff6f6 0,#fffdfd 100%);box-shadow:inset 0 0 0 1px rgba(185,28,28,.08)}.km-sin-item-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;font-size:12px;color:#64748b}.km-sin-time{font-weight:700;color:#334155}.km-sin-stage,.km-sin-attention-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;text-transform:uppercase}.km-sin-stage{background:#e2e8f0;color:#334155}.km-sin-attention-chip{background:#fee2e2;color:#b42318;border:1px solid #f5b4b4}.km-sin-desc{color:#1f2937;font-size:13px;line-height:1.5;word-break:break-word}.km-sin-desc a{color:#0f4c81}.km-sin-notes{margin-top:10px;gap:8px}.km-sin-note{padding:9px 10px;border-radius:9px;background:#fff7bf;border:1px solid #e6d665;color:#6a5600;font-size:12px;line-height:1.45;font-weight:600}.km-sin-frame{width:100%;min-height:70vh;border:1px solid #d4d8de;border-radius:10px;background:#fff;color-scheme:light;forced-color-adjust:none}.km-sin-inline-toggle{display:inline-flex;align-items:center;margin-left:8px}.km-sin-toggle[aria-pressed=true]{background:#0f4c81;border-color:#0f4c81;color:#fff}@media (max-width:1360px){.km-sin-layout{grid-template-columns:minmax(0,1fr)}.km-sin-card{position:relative;top:0;max-height:none}.km-sin-body{max-height:none}}';
+    style.textContent = '.km-sin-inline-toggle{display:inline-flex;align-items:center;margin-left:8px;vertical-align:middle}.km-sin-toggle{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;line-height:1.3;cursor:pointer;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}.km-sin-toggle:hover{background:#f8fafc;border-color:#94a3b8}.km-sin-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,360px);gap:20px;align-items:start;margin-top:12px}.km-sin-layout.km-sin-collapsed{grid-template-columns:minmax(0,1fr)}.km-sin-main,.km-sin-aside{min-width:0;min-height:0}.km-sin-aside[hidden]{display:none!important}.km-sin-card{position:sticky;top:12px;display:flex;flex-direction:column;max-height:calc(100vh - 24px);background:#fff;border:1px solid #d4d8de;border-radius:12px;box-shadow:0 12px 28px rgba(15,23,42,.08);overflow:hidden}.km-sin-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 16px 12px;border-bottom:1px solid #e7eaee;background:linear-gradient(180deg,#f8fafc 0,#fff 100%)}.km-sin-label{margin:0 0 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#52606d}.km-sin-title{margin:0;font-size:18px;line-height:1.2;color:#1f2937}.km-sin-meta,.km-sin-state{padding:0 16px;color:#52606d;font-size:12px}.km-sin-meta{padding-top:12px}.km-sin-state{padding-top:8px;padding-bottom:8px}.km-sin-state.is-error{color:#b42318}.km-sin-state.is-warning{color:#9a6700}.km-sin-actions{display:flex;gap:8px;align-items:center;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}.km-sin-link-btn,.km-sin-mode-btn{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}.km-sin-link-btn:hover,.km-sin-mode-btn:hover{background:#f8fafc;border-color:#94a3b8}.km-sin-link-btn:disabled{cursor:default;opacity:.65}.km-sin-mode-btn{border-color:#bfd7ff;color:#0f4c81;background:#eef6ff}.km-sin-mode-btn[data-mode="yellow-only"]{background:#fff4e5;border-color:#f5c67a;color:#8a4b08}.km-sin-body{flex:1 1 auto;min-height:0;padding:12px 16px 16px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;touch-action:pan-y}.km-sin-empty{padding:14px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;color:#52606d;font-size:13px}.km-sin-empty-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.km-sin-banner{margin-bottom:12px;padding:12px 14px;border-radius:10px;background:#fff4e5;border:1px solid #f5c67a;color:#8a4b08;font-size:13px}.km-sin-group+.km-sin-group{margin-top:16px}.km-sin-day{margin:0 0 10px;font-size:13px;font-weight:700;color:#334155}.km-sin-list,.km-sin-notes{display:grid;gap:10px}.km-sin-item{border:1px solid #e5e7eb;border-radius:10px;background:#fff;padding:12px}.km-sin-item.is-attention{border-color:#f1a4a4;background:linear-gradient(180deg,#fff6f6 0,#fffdfd 100%);box-shadow:inset 0 0 0 1px rgba(185,28,28,.08)}.km-sin-item-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;font-size:12px;color:#64748b}.km-sin-time{font-weight:700;color:#334155}.km-sin-stage,.km-sin-attention-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;text-transform:uppercase}.km-sin-stage{background:#e2e8f0;color:#334155}.km-sin-attention-chip{background:#fee2e2;color:#b42318;border:1px solid #f5b4b4}.km-sin-desc{color:#1f2937;font-size:13px;line-height:1.5;word-break:break-word}.km-sin-desc a{color:#0f4c81}.km-sin-notes{margin-top:10px;gap:8px}.km-sin-note{padding:9px 10px;border-radius:9px;background:#fff7bf;border:1px solid #e6d665;color:#6a5600;font-size:12px;line-height:1.45;font-weight:600}.km-sin-frame{width:100%;min-height:70vh;border:1px solid #d4d8de;border-radius:10px;background:#fff;color-scheme:light;forced-color-adjust:none}@media (max-width:1360px){.km-sin-layout{grid-template-columns:minmax(0,1fr)}.km-sin-card{position:relative;top:0;max-height:none}.km-sin-body{max-height:none}}';
     document.head.appendChild(style);
   }
   function ensureShell(viewRoot) {
@@ -817,7 +820,7 @@
     label.textContent = "Klassmatt";
     const title = document.createElement("h2");
     title.className = "km-sin-title";
-    title.textContent = "Acompanhamento da SIN";
+    title.textContent = "KM Acompanhamento";
     titleWrap.append(label, title);
     const actions = document.createElement("div");
     actions.className = "km-sin-actions";
@@ -976,7 +979,7 @@
     iframe.setAttribute("sandbox", "");
     iframe.setAttribute("data-darkreader-ignore", "");
     iframe.setAttribute("data-darkreader-skip", "");
-    iframe.title = "Historico da SIN (isolado)";
+    iframe.title = "KM Acompanhamento (isolado)";
     iframe.src = "about:blank";
     iframe.srcdoc = buildInlineSnapshotSrcdoc(rawHtml, baseUrl || url, url);
     fragment.appendChild(iframe);
@@ -1215,17 +1218,22 @@
     latestParsed = null;
     latestResult = null;
     renderedCount = 0;
+    inlinePanelOverride = null;
     panelOpen = this.settings.alwaysOpen;
+    currentContextKey = null;
     toggleHost = null;
     toggleButton = null;
     toggleParent = null;
     handleToggleClick = () => {
-      const nextSettings = {
-        ...this.settings,
-        alwaysOpen: !this.settings.alwaysOpen
-      };
-      saveSettings(nextSettings);
-      this.applySettings(nextSettings);
+      const nextOpen = !this.panelOpen;
+      this.inlinePanelOverride = nextOpen === this.settings.alwaysOpen ? null : nextOpen;
+      this.panelOpen = nextOpen;
+      this.syncInlineToggle(resolveQuickPageContext());
+      if (!nextOpen) {
+        this.closePanel();
+        return;
+      }
+      void this.hydrate(true);
     };
     handleModeToggleClick = () => {
       this.settings = {
@@ -1279,11 +1287,13 @@
         }
       }
       this.syncSettingsFromStorage();
+      const quickContext = resolveQuickPageContext();
+      this.syncContextScope(quickContext);
       if (this.panelOpen) {
         void this.hydrate(true);
         return;
       }
-      this.syncClosedState();
+      this.syncClosedState(quickContext);
     };
     constructor(options = {}) {
       this.options = {
@@ -1304,7 +1314,9 @@
     destroy() {
       this.loadSerial++;
       this.panelOpen = false;
+      this.inlinePanelOverride = null;
       this.currentContext = null;
+      this.currentContextKey = null;
       if (this.destroyAspNet) this.destroyAspNet();
       if (this.destroyContextEvents) this.destroyContextEvents();
       this.abortActiveFetch();
@@ -1317,7 +1329,10 @@
       if (!alwaysOpenChanged && !modeChanged) return;
       const wasOpen = this.panelOpen;
       this.settings = nextSettings;
-      this.panelOpen = nextSettings.alwaysOpen;
+      if (alwaysOpenChanged) {
+        this.inlinePanelOverride = null;
+      }
+      this.syncPanelOpenState();
       this.syncInlineToggle(resolveQuickPageContext());
       if (!this.panelOpen) {
         if (wasOpen) {
@@ -1346,6 +1361,7 @@
       this.syncSettingsFromStorage();
       this.pruneDisconnectedShell();
       const quickContext = resolveQuickPageContext();
+      this.syncContextScope(quickContext);
       this.syncInlineToggle(quickContext);
       if (!this.panelOpen) {
         this.hideCurrentSidebar();
@@ -1355,6 +1371,7 @@
       const confirmedContext = await this.confirmTrustedContext(initialContext, serial);
       if (serial !== this.loadSerial || !this.panelOpen) return;
       const context = confirmedContext ?? initialContext;
+      this.syncContextScope(context);
       if (!context.viewRoot) {
         this.hideCurrentSidebar();
         return;
@@ -1402,7 +1419,7 @@
         confirmedContext.sinId ? `SIN ${confirmedContext.sinId} • historico sob demanda` : "Historico do item carregado sob demanda"
       );
       setShellState(shell, "Carregando historico...", "default");
-      renderEmpty(shell, "Buscando o conteudo de Acompanhamento da SIN...");
+      renderEmpty(shell, "Buscando o conteudo de KM Acompanhamento...");
       let result;
       try {
         result = await this.getHistoryResult(confirmedContext, force);
@@ -1665,6 +1682,58 @@
       shell.inlineButton.onclick = this.handleInlineRender;
       shell.modeButton.onclick = this.handleModeToggleClick;
     }
+    syncPanelOpenState() {
+      this.panelOpen = this.inlinePanelOverride ?? this.settings.alwaysOpen;
+    }
+    getContextScopeKey(context) {
+      return context.historyIdentity?.fingerprint || context.sinId || context.historyUrl || null;
+    }
+    syncContextScope(context) {
+      const nextContextKey = this.getContextScopeKey(context);
+      if (!nextContextKey) return;
+      if (this.currentContextKey && this.currentContextKey !== nextContextKey) {
+        this.inlinePanelOverride = null;
+      }
+      this.currentContextKey = nextContextKey;
+      this.syncPanelOpenState();
+    }
+    syncInlineToggle(_context = resolveQuickPageContext()) {
+      const linkEl = _context.linkEl;
+      const parent = linkEl?.parentElement;
+      if (!linkEl || !parent) {
+        this.removeInlineToggle();
+        return;
+      }
+      const needsNewButton = !this.toggleHost || !this.toggleButton || !this.toggleHost.isConnected || this.toggleParent !== parent;
+      if (needsNewButton) {
+        this.removeInlineToggle();
+        const host = document.createElement("span");
+        host.className = "km-sin-inline-toggle";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "km-sin-toggle";
+        button.addEventListener("click", this.handleToggleClick);
+        host.appendChild(button);
+        linkEl.insertAdjacentElement("afterend", host);
+        this.toggleHost = host;
+        this.toggleButton = button;
+        this.toggleParent = parent;
+      } else if (this.toggleHost.previousElementSibling !== linkEl) {
+        linkEl.insertAdjacentElement("afterend", this.toggleHost);
+      }
+      const label = getInlinePanelToggleLabel(this.panelOpen);
+      this.toggleButton.textContent = label;
+      this.toggleButton.title = label;
+      this.toggleButton.setAttribute("aria-pressed", String(this.panelOpen));
+    }
+    removeInlineToggle() {
+      if (this.toggleHost?.isConnected) {
+        this.toggleHost.remove();
+      }
+      this.toggleHost = null;
+      this.toggleButton = null;
+      this.toggleParent = null;
+    }
     syncModeButton(shell) {
       const mode = this.settings.timelineMode;
       shell.modeButton.dataset.mode = mode;
@@ -1693,44 +1762,10 @@
       const secondRead = resolvePageContext();
       return secondRead.isStable && Boolean(secondRead.historyIdentity?.fingerprint) ? secondRead : null;
     }
-    syncInlineToggle(context = resolveQuickPageContext()) {
-      const parent = context.linkEl?.parentElement ?? null;
-      if (!parent || !context.linkEl) {
-        this.removeInlineToggle();
-        return;
-      }
-      if (this.toggleHost && (!this.toggleHost.isConnected || this.toggleParent !== parent)) {
-        this.removeInlineToggle();
-      }
-      if (!this.toggleHost || !this.toggleButton) {
-        this.toggleHost = document.createElement("span");
-        this.toggleHost.className = "km-sin-inline-toggle";
-        this.toggleButton = document.createElement("button");
-        this.toggleButton.type = "button";
-        this.toggleButton.className = "km-sin-toggle";
-        this.toggleButton.addEventListener("click", this.handleToggleClick);
-        this.toggleHost.appendChild(this.toggleButton);
-      }
-      this.toggleParent = parent;
-      if (this.toggleHost.previousElementSibling !== context.linkEl || this.toggleHost.parentElement !== parent) {
-        context.linkEl.insertAdjacentElement("afterend", this.toggleHost);
-      }
-      const label = getAlwaysOpenToggleLabel(this.settings.alwaysOpen);
-      this.toggleButton.textContent = label;
-      this.toggleButton.setAttribute("aria-pressed", this.settings.alwaysOpen ? "true" : "false");
-      this.toggleButton.title = label;
-    }
-    removeInlineToggle() {
-      if (this.toggleHost?.isConnected) {
-        this.toggleHost.remove();
-      }
-      this.toggleHost = null;
-      this.toggleButton = null;
-      this.toggleParent = null;
-    }
-    syncClosedState() {
+    syncClosedState(context = resolveQuickPageContext()) {
       this.pruneDisconnectedShell();
-      this.syncInlineToggle(resolveQuickPageContext());
+      this.syncContextScope(context);
+      this.syncInlineToggle(context);
       if (!this.panelOpen) {
         this.hideCurrentSidebar();
       }
@@ -1811,7 +1846,7 @@
     syncSettingsFromStorage() {
       const storedSettings = loadSettings();
       this.settings = storedSettings;
-      this.panelOpen = storedSettings.alwaysOpen;
+      this.syncPanelOpenState();
     }
     clearParsedState() {
       this.latestParsed = null;
@@ -1859,6 +1894,9 @@
   }
   let app = null;
   let alwaysOpenMenuId = null;
+  let bootstrapObserver = null;
+  let bootstrapCleanupTimer = 0;
+  const BOOTSTRAP_OBSERVER_TIMEOUT_MS = 15e3;
   function unregisterAlwaysOpenMenu() {
     if (alwaysOpenMenuId === null || typeof GM_unregisterMenuCommand !== "function") return;
     GM_unregisterMenuCommand(alwaysOpenMenuId);
@@ -1868,7 +1906,7 @@
     if (typeof GM_registerMenuCommand !== "function") return;
     unregisterAlwaysOpenMenu();
     const settings = loadSettings();
-    const label = getAlwaysOpenToggleLabel(settings.alwaysOpen);
+    const label = getAlwaysOpenMenuLabel(settings.alwaysOpen);
     alwaysOpenMenuId = GM_registerMenuCommand(label, () => {
       const currentSettings = loadSettings();
       const nextSettings = {
@@ -1888,8 +1926,38 @@
   function handleSettingsChanged() {
     syncAlwaysOpenMenu();
   }
+  function cleanupBootstrapObserver() {
+    if (bootstrapObserver) {
+      bootstrapObserver.disconnect();
+      bootstrapObserver = null;
+    }
+    if (bootstrapCleanupTimer) {
+      window.clearTimeout(bootstrapCleanupTimer);
+      bootstrapCleanupTimer = 0;
+    }
+  }
+  function scheduleBootstrapObserver() {
+    if (app || bootstrapObserver) return;
+    const observeRoot = document.body ?? document.documentElement;
+    if (!observeRoot) return;
+    bootstrapObserver = new MutationObserver(() => {
+      start();
+    });
+    bootstrapObserver.observe(observeRoot, {
+      childList: true,
+      subtree: true
+    });
+    bootstrapCleanupTimer = window.setTimeout(() => {
+      cleanupBootstrapObserver();
+    }, BOOTSTRAP_OBSERVER_TIMEOUT_MS);
+  }
   function start() {
-    if (!shouldBootstrapSinSidebar()) return;
+    if (app) return;
+    if (!shouldBootstrapSinSidebar()) {
+      scheduleBootstrapObserver();
+      return;
+    }
+    cleanupBootstrapObserver();
     app = new SinSidebarApp();
     app.init();
   }
@@ -1904,6 +1972,7 @@
   globalThis.addEventListener("beforeunload", () => {
     globalThis.removeEventListener("storage", handleStorageEvent);
     globalThis.removeEventListener(SETTINGS_CHANGED_EVENT, handleSettingsChanged);
+    cleanupBootstrapObserver();
     unregisterAlwaysOpenMenu();
     app?.destroy();
   }, { once: true });

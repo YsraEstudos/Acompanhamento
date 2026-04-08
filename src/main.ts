@@ -18,6 +18,10 @@ declare const GM_unregisterMenuCommand:
 
 let app: SinSidebarApp | null = null;
 let alwaysOpenMenuId: number | string | null = null;
+let bootstrapObserver: MutationObserver | null = null;
+let bootstrapCleanupTimer = 0;
+
+const BOOTSTRAP_OBSERVER_TIMEOUT_MS = 15000;
 
 function unregisterAlwaysOpenMenu(): void {
   if (alwaysOpenMenuId === null || typeof GM_unregisterMenuCommand !== 'function') return;
@@ -55,8 +59,46 @@ function handleSettingsChanged(): void {
   syncAlwaysOpenMenu();
 }
 
+function cleanupBootstrapObserver(): void {
+  if (bootstrapObserver) {
+    bootstrapObserver.disconnect();
+    bootstrapObserver = null;
+  }
+
+  if (bootstrapCleanupTimer) {
+    window.clearTimeout(bootstrapCleanupTimer);
+    bootstrapCleanupTimer = 0;
+  }
+}
+
+function scheduleBootstrapObserver(): void {
+  if (app || bootstrapObserver) return;
+
+  const observeRoot = document.body ?? document.documentElement;
+  if (!observeRoot) return;
+
+  bootstrapObserver = new MutationObserver(() => {
+    start();
+  });
+
+  bootstrapObserver.observe(observeRoot, {
+    childList: true,
+    subtree: true
+  });
+
+  bootstrapCleanupTimer = window.setTimeout(() => {
+    cleanupBootstrapObserver();
+  }, BOOTSTRAP_OBSERVER_TIMEOUT_MS);
+}
+
 function start(): void {
-  if (!shouldBootstrapSinSidebar()) return;
+  if (app) return;
+  if (!shouldBootstrapSinSidebar()) {
+    scheduleBootstrapObserver();
+    return;
+  }
+
+  cleanupBootstrapObserver();
   app = new SinSidebarApp();
   app.init();
 }
@@ -74,6 +116,7 @@ globalThis.addEventListener(SETTINGS_CHANGED_EVENT, handleSettingsChanged as Eve
 globalThis.addEventListener('beforeunload', () => {
   globalThis.removeEventListener('storage', handleStorageEvent);
   globalThis.removeEventListener(SETTINGS_CHANGED_EVENT, handleSettingsChanged as EventListener);
+  cleanupBootstrapObserver();
   unregisterAlwaysOpenMenu();
   app?.destroy();
 }, { once: true });

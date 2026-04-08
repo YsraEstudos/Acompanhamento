@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.7
+// @version      1.0.8
 // @author       OpenAI Codex
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.7/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.8/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -1894,6 +1894,9 @@
   }
   let app = null;
   let alwaysOpenMenuId = null;
+  let bootstrapObserver = null;
+  let bootstrapCleanupTimer = 0;
+  const BOOTSTRAP_OBSERVER_TIMEOUT_MS = 15e3;
   function unregisterAlwaysOpenMenu() {
     if (alwaysOpenMenuId === null || typeof GM_unregisterMenuCommand !== "function") return;
     GM_unregisterMenuCommand(alwaysOpenMenuId);
@@ -1923,8 +1926,38 @@
   function handleSettingsChanged() {
     syncAlwaysOpenMenu();
   }
+  function cleanupBootstrapObserver() {
+    if (bootstrapObserver) {
+      bootstrapObserver.disconnect();
+      bootstrapObserver = null;
+    }
+    if (bootstrapCleanupTimer) {
+      window.clearTimeout(bootstrapCleanupTimer);
+      bootstrapCleanupTimer = 0;
+    }
+  }
+  function scheduleBootstrapObserver() {
+    if (app || bootstrapObserver) return;
+    const observeRoot = document.body ?? document.documentElement;
+    if (!observeRoot) return;
+    bootstrapObserver = new MutationObserver(() => {
+      start();
+    });
+    bootstrapObserver.observe(observeRoot, {
+      childList: true,
+      subtree: true
+    });
+    bootstrapCleanupTimer = window.setTimeout(() => {
+      cleanupBootstrapObserver();
+    }, BOOTSTRAP_OBSERVER_TIMEOUT_MS);
+  }
   function start() {
-    if (!shouldBootstrapSinSidebar()) return;
+    if (app) return;
+    if (!shouldBootstrapSinSidebar()) {
+      scheduleBootstrapObserver();
+      return;
+    }
+    cleanupBootstrapObserver();
     app = new SinSidebarApp();
     app.init();
   }
@@ -1939,6 +1972,7 @@
   globalThis.addEventListener("beforeunload", () => {
     globalThis.removeEventListener("storage", handleStorageEvent);
     globalThis.removeEventListener(SETTINGS_CHANGED_EVENT, handleSettingsChanged);
+    cleanupBootstrapObserver();
     unregisterAlwaysOpenMenu();
     app?.destroy();
   }, { once: true });
