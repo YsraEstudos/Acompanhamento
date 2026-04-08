@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.5
+// @version      1.0.6
 // @author       OpenAI Codex
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.5/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.6/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -1075,6 +1075,15 @@
       hasSummaryLabel: Boolean(element.querySelector("#Label_infoSIN"))
     }));
   }
+  function findQuickViewRoot() {
+    return document.querySelector("#UpdatePanel1 .kl-view, .kl-view");
+  }
+  function findQuickSummary(scope) {
+    return scope.querySelector("#DV_Resumo_sin");
+  }
+  function findDirectHistoryLink(root) {
+    return root.querySelector("#hButAcompanhamentoSIN, #hlkObs");
+  }
   function resolvePageContext() {
     const viewRoot = findBestViewRoot();
     const scope = viewRoot ?? document;
@@ -1098,6 +1107,21 @@
       sinId,
       summarySinId: sinIdFromSummary,
       isStable,
+      viewRoot,
+      summaryEl,
+      linkEl
+    };
+  }
+  function resolveQuickPageContext() {
+    const viewRoot = findQuickViewRoot();
+    const scope = viewRoot ?? document;
+    const summaryEl = findQuickSummary(scope);
+    const linkEl = summaryEl ? findDirectHistoryLink(summaryEl) || findDirectHistoryLink(scope) : findDirectHistoryLink(scope);
+    const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute("href")) : null;
+    return {
+      historyUrl: historyIdentity?.absoluteUrl || null,
+      historyIdentity,
+      sinId: historyIdentity?.id || extractSinIdFromSummary(summaryEl),
       viewRoot,
       summaryEl,
       linkEl
@@ -1191,7 +1215,23 @@
     latestParsed = null;
     latestResult = null;
     renderedCount = 0;
+    inlinePanelOverride = null;
     panelOpen = this.settings.alwaysOpen;
+    currentContextKey = null;
+    toggleHost = null;
+    toggleButton = null;
+    toggleParent = null;
+    handleToggleClick = () => {
+      const nextOpen = !this.panelOpen;
+      this.inlinePanelOverride = nextOpen === this.settings.alwaysOpen ? null : nextOpen;
+      this.panelOpen = nextOpen;
+      this.syncInlineToggle(resolveQuickPageContext());
+      if (!nextOpen) {
+        this.closePanel();
+        return;
+      }
+      void this.hydrate(true);
+    };
     handleModeToggleClick = () => {
       this.settings = {
         ...this.settings,
@@ -1269,10 +1309,13 @@
     destroy() {
       this.loadSerial++;
       this.panelOpen = false;
+      this.inlinePanelOverride = null;
       this.currentContext = null;
+      this.currentContextKey = null;
       if (this.destroyAspNet) this.destroyAspNet();
       if (this.destroyContextEvents) this.destroyContextEvents();
       this.abortActiveFetch();
+      this.removeInlineToggle();
       this.clearParsedState();
     }
     applySettings(nextSettings) {
@@ -1281,7 +1324,11 @@
       if (!alwaysOpenChanged && !modeChanged) return;
       const wasOpen = this.panelOpen;
       this.settings = nextSettings;
-      this.panelOpen = this.settings.alwaysOpen;
+      if (alwaysOpenChanged) {
+        this.inlinePanelOverride = null;
+      }
+      this.syncPanelOpenState();
+      this.syncInlineToggle(resolveQuickPageContext());
       if (!this.panelOpen) {
         if (wasOpen) {
           this.closePanel();
@@ -1308,6 +1355,9 @@
       const serial = ++this.loadSerial;
       this.syncSettingsFromStorage();
       this.pruneDisconnectedShell();
+      const quickContext = resolveQuickPageContext();
+      this.syncContextScope(quickContext);
+      this.syncInlineToggle(quickContext);
       if (!this.panelOpen) {
         this.hideCurrentSidebar();
         return;
@@ -1316,6 +1366,7 @@
       const confirmedContext = await this.confirmTrustedContext(initialContext, serial);
       if (serial !== this.loadSerial || !this.panelOpen) return;
       const context = confirmedContext ?? initialContext;
+      this.syncContextScope(context);
       if (!context.viewRoot) {
         this.hideCurrentSidebar();
         return;
@@ -1626,6 +1677,32 @@
       shell.inlineButton.onclick = this.handleInlineRender;
       shell.modeButton.onclick = this.handleModeToggleClick;
     }
+    syncPanelOpenState() {
+      this.panelOpen = this.inlinePanelOverride ?? this.settings.alwaysOpen;
+    }
+    getContextScopeKey(context) {
+      return context.historyIdentity?.fingerprint || context.sinId || context.historyUrl || null;
+    }
+    syncContextScope(context) {
+      const nextContextKey = this.getContextScopeKey(context);
+      if (!nextContextKey) return;
+      if (this.currentContextKey && this.currentContextKey !== nextContextKey) {
+        this.inlinePanelOverride = null;
+      }
+      this.currentContextKey = nextContextKey;
+      this.syncPanelOpenState();
+    }
+    syncInlineToggle(_context = resolveQuickPageContext()) {
+      this.removeInlineToggle();
+    }
+    removeInlineToggle() {
+      if (this.toggleHost?.isConnected) {
+        this.toggleHost.remove();
+      }
+      this.toggleHost = null;
+      this.toggleButton = null;
+      this.toggleParent = null;
+    }
     syncModeButton(shell) {
       const mode = this.settings.timelineMode;
       shell.modeButton.dataset.mode = mode;
@@ -1656,6 +1733,7 @@
     }
     syncClosedState() {
       this.pruneDisconnectedShell();
+      this.syncInlineToggle(resolveQuickPageContext());
       if (!this.panelOpen) {
         this.hideCurrentSidebar();
       }
@@ -1667,6 +1745,7 @@
       this.clearParsedState();
       this.currentContext = null;
       this.hideCurrentSidebar(true);
+      this.syncInlineToggle(resolveQuickPageContext());
     }
     hideCurrentSidebar(clearBody = false) {
       if (this.currentShell?.layoutEl.isConnected) {
@@ -1735,7 +1814,7 @@
     syncSettingsFromStorage() {
       const storedSettings = loadSettings();
       this.settings = storedSettings;
-      this.panelOpen = this.settings.alwaysOpen;
+      this.syncPanelOpenState();
     }
     clearParsedState() {
       this.latestParsed = null;

@@ -26,6 +26,8 @@ import {
 } from './ui';
 import {
   resolvePageContext,
+  resolveQuickPageContext,
+  type QuickSinPageContext,
   type SinPageContext
 } from './url';
 
@@ -183,7 +185,26 @@ export class SinSidebarApp {
   private latestParsed: ParsedTimelineState | null = null;
   private latestResult: SinHistoryResult | null = null;
   private renderedCount = 0;
+  private inlinePanelOverride: boolean | null = null;
   private panelOpen = this.settings.alwaysOpen;
+  private currentContextKey: string | null = null;
+  private toggleHost: HTMLSpanElement | null = null;
+  private toggleButton: HTMLButtonElement | null = null;
+  private toggleParent: HTMLElement | null = null;
+
+  private readonly handleToggleClick = (): void => {
+    const nextOpen = !this.panelOpen;
+    this.inlinePanelOverride = nextOpen === this.settings.alwaysOpen ? null : nextOpen;
+    this.panelOpen = nextOpen;
+    this.syncInlineToggle(resolveQuickPageContext());
+
+    if (!nextOpen) {
+      this.closePanel();
+      return;
+    }
+
+    void this.hydrate(true);
+  };
 
   private readonly handleModeToggleClick = (): void => {
     this.settings = {
@@ -275,10 +296,13 @@ export class SinSidebarApp {
   destroy(): void {
     this.loadSerial++;
     this.panelOpen = false;
+    this.inlinePanelOverride = null;
     this.currentContext = null;
+    this.currentContextKey = null;
     if (this.destroyAspNet) this.destroyAspNet();
     if (this.destroyContextEvents) this.destroyContextEvents();
     this.abortActiveFetch();
+    this.removeInlineToggle();
     this.clearParsedState();
   }
 
@@ -290,7 +314,11 @@ export class SinSidebarApp {
 
     const wasOpen = this.panelOpen;
     this.settings = nextSettings;
-    this.panelOpen = this.settings.alwaysOpen;
+    if (alwaysOpenChanged) {
+      this.inlinePanelOverride = null;
+    }
+    this.syncPanelOpenState();
+    this.syncInlineToggle(resolveQuickPageContext());
 
     if (!this.panelOpen) {
       if (wasOpen) {
@@ -323,6 +351,9 @@ export class SinSidebarApp {
     const serial = ++this.loadSerial;
     this.syncSettingsFromStorage();
     this.pruneDisconnectedShell();
+    const quickContext = resolveQuickPageContext();
+    this.syncContextScope(quickContext);
+    this.syncInlineToggle(quickContext);
 
     if (!this.panelOpen) {
       this.hideCurrentSidebar();
@@ -334,6 +365,7 @@ export class SinSidebarApp {
     if (serial !== this.loadSerial || !this.panelOpen) return;
 
     const context = confirmedContext ?? initialContext;
+    this.syncContextScope(context);
     if (!context.viewRoot) {
       this.hideCurrentSidebar();
       return;
@@ -706,6 +738,40 @@ export class SinSidebarApp {
     shell.modeButton.onclick = this.handleModeToggleClick;
   }
 
+  private syncPanelOpenState(): void {
+    this.panelOpen = this.inlinePanelOverride ?? this.settings.alwaysOpen;
+  }
+
+  private getContextScopeKey(context: QuickSinPageContext | SinPageContext): string | null {
+    return context.historyIdentity?.fingerprint || context.sinId || context.historyUrl || null;
+  }
+
+  private syncContextScope(context: QuickSinPageContext | SinPageContext): void {
+    const nextContextKey = this.getContextScopeKey(context);
+    if (!nextContextKey) return;
+
+    if (this.currentContextKey && this.currentContextKey !== nextContextKey) {
+      this.inlinePanelOverride = null;
+    }
+
+    this.currentContextKey = nextContextKey;
+    this.syncPanelOpenState();
+  }
+
+  private syncInlineToggle(_context: QuickSinPageContext = resolveQuickPageContext()): void {
+    this.removeInlineToggle();
+  }
+
+  private removeInlineToggle(): void {
+    if (this.toggleHost?.isConnected) {
+      this.toggleHost.remove();
+    }
+
+    this.toggleHost = null;
+    this.toggleButton = null;
+    this.toggleParent = null;
+  }
+
   private syncModeButton(shell: ShellRefs): void {
     const mode = this.settings.timelineMode;
     shell.modeButton.dataset.mode = mode;
@@ -747,6 +813,7 @@ export class SinSidebarApp {
 
   private syncClosedState(): void {
     this.pruneDisconnectedShell();
+    this.syncInlineToggle(resolveQuickPageContext());
     if (!this.panelOpen) {
       this.hideCurrentSidebar();
     }
@@ -759,6 +826,7 @@ export class SinSidebarApp {
     this.clearParsedState();
     this.currentContext = null;
     this.hideCurrentSidebar(true);
+    this.syncInlineToggle(resolveQuickPageContext());
   }
 
   private hideCurrentSidebar(clearBody = false): void {
@@ -840,7 +908,7 @@ export class SinSidebarApp {
   private syncSettingsFromStorage(): void {
     const storedSettings = loadSettings();
     this.settings = storedSettings;
-    this.panelOpen = this.settings.alwaysOpen;
+    this.syncPanelOpenState();
   }
 
   private clearParsedState(): void {

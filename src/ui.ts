@@ -368,4 +368,3 @@ export function renderIframeFallback(
   fragment.appendChild(iframe);
   shell.bodyEl.replaceChildren(fragment);
 }
-
