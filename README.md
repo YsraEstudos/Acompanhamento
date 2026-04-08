@@ -21,8 +21,9 @@ Se o usuario ja tinha configurado o script antes, a preferencia salva continua v
 ## O que mudou no uso
 
 - O menu do Tampermonkey controla a preferencia global `alwaysOpen`.
-- Nao existe mais botao inline de mostrar/ocultar na pagina.
-- O painel fica sob controle do menu do Tampermonkey e do estado global `alwaysOpen`.
+- O botao inline ao lado do link nativo agora alterna apenas `Mostrar painel` / `Ocultar painel` para o item atual.
+- Esse botao inline nao persiste a preferencia global e nao altera `alwaysOpen`.
+- Ao trocar de item, recarregar o contexto ou abrir outro item, o comportamento volta a seguir `alwaysOpen`.
 - O modo `Tudo` / `Amarelos` continua separado e continua persistente.
 
 ## Hardening de seguranca

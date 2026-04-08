@@ -173,6 +173,12 @@ async function openPanel(): Promise<void> {
   await flush();
 }
 
+async function clickInlineToggle(): Promise<void> {
+  document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.click();
+  await flush();
+  await flush();
+}
+
 describe('SinSidebarApp', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -199,7 +205,7 @@ describe('SinSidebarApp', () => {
     expect(document.querySelector('.km-sin-title')?.textContent).toBe('KM Acompanhamento');
     expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
     expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
     app.destroy();
   });
@@ -213,7 +219,7 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
     expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Tudo');
     app.destroy();
   });
@@ -248,6 +254,7 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(0);
     expect(document.querySelector('.km-sin-layout')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
 
     document.body.innerHTML = buildItemPage({ sinId: '209356' });
     window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=209356');
@@ -258,11 +265,11 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(0);
     expect(document.querySelector('.km-sin-layout')).toBeNull();
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
     app.destroy();
   });
 
-  it('does not render a page-level toggle when always-open is disabled', async () => {
+  it('uses the page-level toggle as a local override without persisting always-open', async () => {
     setSettings({ alwaysOpen: false, timelineMode: 'all' });
     const fetchMock = vi.fn(async () => buildHistoryResponse(readFixture('hist-strict.html')));
     vi.stubGlobal('fetch', fetchMock);
@@ -271,15 +278,148 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(0);
     expect(document.querySelector('.km-sin-layout')).toBeNull();
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
 
-    setSettings({ alwaysOpen: true, timelineMode: 'all' });
-    await app.applySettings({ alwaysOpen: true, timelineMode: 'all' });
-    await flush();
+    await clickInlineToggle();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
+    expect(loadSettings()).toEqual({ alwaysOpen: false, timelineMode: 'all' });
+    app.destroy();
+  });
+
+  it('resets a local close override on the next item when always-open stays enabled', async () => {
+    vi.useFakeTimers();
+
+    let endRequestHandler: (() => void) | null = null;
+    const manager = {
+      add_endRequest: vi.fn((fn: () => void) => {
+        endRequestHandler = fn;
+      }),
+      remove_endRequest: vi.fn()
+    };
+
+    (globalThis as any).Sys = {
+      WebForms: {
+        PageRequestManager: {
+          getInstance: () => manager
+        }
+      }
+    };
+
+    setSettings({ alwaysOpen: true, timelineMode: 'all' });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('Id=209356')) {
+        return buildHistoryResponse(wrapHistoryHtml(`
+          <fieldset class="hist-fieldset">
+            <legend class="hist-legend">sexta-feira, 13 de fevereiro de 2026</legend>
+            <div class="row"><a id="hlinkUsuario">BIA.TESTE*</a></div>
+            <div class="row result">
+              <span id="lblHora">11:00:00</span>
+              <span id="lblDescricao">Solicitacao enviada para FISCAL-INTEGRA</span>
+            </div>
+          </fieldset>
+        `, 'source=SIN&Id=209356&SomenteLeitura=1'));
+      }
+
+      return buildHistoryResponse(readFixture('hist-strict.html'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = new SinSidebarApp();
+    app.init();
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
+
+    document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.click();
+    await flushMicrotasks();
+
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
+    expect(document.querySelector('.km-sin-aside')?.hasAttribute('hidden')).toBe(true);
+
+    document.body.innerHTML = buildItemPage({ sinId: '209356' });
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=209356');
+
+    expect(endRequestHandler).not.toBeNull();
+    (endRequestHandler as unknown as () => void)();
+    await vi.advanceTimersByTimeAsync(150);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
+    expect(document.querySelector('.km-sin-aside')?.hasAttribute('hidden')).toBe(false);
+    app.destroy();
+  });
+
+  it('resets a local open override on the next item when always-open stays disabled', async () => {
+    vi.useFakeTimers();
+
+    let endRequestHandler: (() => void) | null = null;
+    const manager = {
+      add_endRequest: vi.fn((fn: () => void) => {
+        endRequestHandler = fn;
+      }),
+      remove_endRequest: vi.fn()
+    };
+
+    (globalThis as any).Sys = {
+      WebForms: {
+        PageRequestManager: {
+          getInstance: () => manager
+        }
+      }
+    };
+
+    setSettings({ alwaysOpen: false, timelineMode: 'all' });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('Id=209356')) {
+        return buildHistoryResponse(wrapHistoryHtml(`
+          <fieldset class="hist-fieldset">
+            <legend class="hist-legend">sexta-feira, 13 de fevereiro de 2026</legend>
+            <div class="row"><a id="hlinkUsuario">BIA.TESTE*</a></div>
+            <div class="row result">
+              <span id="lblHora">11:00:00</span>
+              <span id="lblDescricao">Solicitacao enviada para FISCAL-INTEGRA</span>
+            </div>
+          </fieldset>
+        `, 'source=SIN&Id=209356&SomenteLeitura=1'));
+      }
+
+      return buildHistoryResponse(readFixture('hist-strict.html'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = new SinSidebarApp();
+    app.init();
+    await vi.advanceTimersByTimeAsync(500);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(0);
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
+
+    document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.click();
+    await vi.advanceTimersByTimeAsync(150);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
+
+    document.body.innerHTML = buildItemPage({ sinId: '209356' });
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=209356');
+
+    expect(endRequestHandler).not.toBeNull();
+    (endRequestHandler as unknown as () => void)();
+    await vi.advanceTimersByTimeAsync(150);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.km-sin-layout')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
     app.destroy();
   });
 
@@ -368,7 +508,7 @@ describe('SinSidebarApp', () => {
 
     const secondApp = await initApp({ hookAspNet: false });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
     expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
     secondApp.destroy();
   });
@@ -409,7 +549,7 @@ describe('SinSidebarApp', () => {
 
     const app = await initApp({ hookAspNet: false });
     expect(fetchMock).toHaveBeenCalledTimes(0);
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
 
     const previousValue = JSON.stringify({ alwaysOpen: false, timelineMode: 'all' });
     const nextValue = JSON.stringify({ alwaysOpen: true, timelineMode: 'all' });
@@ -420,7 +560,7 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
     app.destroy();
   });
 
@@ -438,7 +578,7 @@ describe('SinSidebarApp', () => {
     await flush();
 
     expect(document.querySelector('.km-sin-aside')?.hasAttribute('hidden')).toBe(true);
-    expect(document.querySelector('.km-sin-toggle')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Mostrar painel');
     app.destroy();
   });
 

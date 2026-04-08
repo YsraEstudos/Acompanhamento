@@ -7,6 +7,7 @@ import {
 } from './history-identity';
 import { parseHistoryStrict, type ParseHistoryResult, type TimelineEvent } from './parse';
 import {
+  getInlinePanelToggleLabel,
   loadSettings,
   saveSettings,
   SETTINGS_KEY,
@@ -266,12 +267,14 @@ export class SinSidebarApp {
     }
 
     this.syncSettingsFromStorage();
+    const quickContext = resolveQuickPageContext();
+    this.syncContextScope(quickContext);
     if (this.panelOpen) {
       void this.hydrate(true);
       return;
     }
 
-    this.syncClosedState();
+    this.syncClosedState(quickContext);
   };
 
   constructor(options: AppOptions = {}) {
@@ -759,7 +762,46 @@ export class SinSidebarApp {
   }
 
   private syncInlineToggle(_context: QuickSinPageContext = resolveQuickPageContext()): void {
-    this.removeInlineToggle();
+    const linkEl = _context.linkEl;
+    const parent = linkEl?.parentElement;
+
+    if (!linkEl || !parent) {
+      this.removeInlineToggle();
+      return;
+    }
+
+    const needsNewButton = (
+      !this.toggleHost
+      || !this.toggleButton
+      || !this.toggleHost.isConnected
+      || this.toggleParent !== parent
+    );
+
+    if (needsNewButton) {
+      this.removeInlineToggle();
+
+      const host = document.createElement('span');
+      host.className = 'km-sin-inline-toggle';
+
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'km-sin-toggle';
+      button.addEventListener('click', this.handleToggleClick);
+
+      host.appendChild(button);
+      linkEl.insertAdjacentElement('afterend', host);
+
+      this.toggleHost = host;
+      this.toggleButton = button;
+      this.toggleParent = parent;
+    } else if (this.toggleHost.previousElementSibling !== linkEl) {
+      linkEl.insertAdjacentElement('afterend', this.toggleHost);
+    }
+
+    const label = getInlinePanelToggleLabel(this.panelOpen);
+    this.toggleButton.textContent = label;
+    this.toggleButton.title = label;
+    this.toggleButton.setAttribute('aria-pressed', String(this.panelOpen));
   }
 
   private removeInlineToggle(): void {
@@ -811,9 +853,10 @@ export class SinSidebarApp {
       : null;
   }
 
-  private syncClosedState(): void {
+  private syncClosedState(context: QuickSinPageContext = resolveQuickPageContext()): void {
     this.pruneDisconnectedShell();
-    this.syncInlineToggle(resolveQuickPageContext());
+    this.syncContextScope(context);
+    this.syncInlineToggle(context);
     if (!this.panelOpen) {
       this.hideCurrentSidebar();
     }
