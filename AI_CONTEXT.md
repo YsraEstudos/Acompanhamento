@@ -15,7 +15,7 @@ The current product decision is important:
 
 - On a clean install, the script starts with `alwaysOpen=true` and `timelineMode='yellow-only'`.
 - The Tampermonkey menu is the only persistent control for the global `alwaysOpen` preference.
-- The inline toggle only opens or closes the panel for the current item/context.
+- There is no page-level show/hide toggle near the native link anymore.
 - When `alwaysOpen` is enabled, the panel auto-opens across supported item pages.
 - When `alwaysOpen` is disabled, the panel closes immediately and stays closed on the next item/project until re-enabled.
 - Once opened, the panel shows the chosen timeline mode, either only yellow notes or the full acompanhamento.
@@ -164,8 +164,7 @@ The panel:
 
 - starts open on a clean install because `alwaysOpen` defaults to true
 - starts in `Amarelos` on a clean install because `timelineMode` defaults to `yellow-only`
-- keeps only a lightweight inline toggle active while closed
-- uses the inline toggle as a local item-level control, switching between `Mostrar painel` and `Ocultar painel`
+- does not inject a page-level toggle; the panel visibility is controlled globally by the Tampermonkey menu
 - keeps the Tampermonkey menu responsible for `Ativar acompanhamento sempre visivel` / `Desativar acompanhamento sempre visivel`
 - keeps the Tampermonkey menu synchronized with the same global state
 - resolves the `Historico.aspx` URL only when the user opens the panel and the SIN context is stable
@@ -179,7 +178,7 @@ The panel:
 
 During ASP.NET partial updates:
 
-- if the panel is closed, the app only re-injects the lightweight toggle when necessary
+- if the panel is closed, the app simply stays hidden until `alwaysOpen` is enabled again
 - if the panel is open, the app treats the page as unstable if the SIN link/summary are missing or inconsistent
 - the panel clears previous comments instead of keeping stale results on screen
 - fetches from the previous item are aborted and ignored if they resolve late
@@ -217,7 +216,7 @@ User preference is stored in localStorage:
 { "alwaysOpen": true, "timelineMode": "yellow-only" }
 ```
 
-- `alwaysOpen` is the global always-visible mode used by the inline toggle and the Tampermonkey menu.
+- `alwaysOpen` is the global always-visible mode controlled by the Tampermonkey menu.
 - `timelineMode` remains independent and only controls whether the timeline shows `Tudo` or only `Amarelos`.
 
 ## 6. Source layout and file responsibilities
@@ -241,7 +240,7 @@ User preference is stored in localStorage:
 - `src/app.ts`
   Main orchestration layer.
   Responsibilities:
-  - lightweight toggle injection
+  - panel visibility management driven by the persistent global `alwaysOpen` preference
   - on-demand page hydration
   - ASP.NET endRequest integration
   - fetch lifecycle
@@ -251,10 +250,9 @@ User preference is stored in localStorage:
   - batched timeline rendering with yellow-note and attention-state summaries
 
   Important behavior:
-  - The inline button only toggles the current item view, so it changes between `Mostrar painel` and `Ocultar painel`.
   - The Tampermonkey menu is the only place that changes the persistent `alwaysOpen` setting.
-  - When `alwaysOpen` is enabled, the panel opens automatically on supported pages unless the user locally hides it for the current item.
-  - When `alwaysOpen` is disabled, the panel stays closed by default unless the user locally opens it for the current item.
+  - When `alwaysOpen` is enabled, the panel opens automatically on supported pages.
+  - When `alwaysOpen` is disabled, the panel stays closed by default.
   - `renderResult()` applies the persistent `Tudo` / `Amarelos` mode before calling `renderTimeline()`.
   - `abortActiveFetch()` and the cache-key logic prevent old item fetches from overwriting the current item.
   - Large timelines are rendered in fixed batches with `Carregar mais`.
@@ -465,7 +463,7 @@ What is covered:
 - The title is always "KM Acompanhamento".
 - The panel includes:
 - `Ver inline` (forces a sandboxed sanitized snapshot render of the fetched history HTML right inside the side panel)
-- inline item-level panel toggle near the native link, with labels that switch between `Mostrar painel` and `Ocultar painel`
+- no page-level show/hide toggle near the native link
 
 ## 11. Constraints and assumptions
 
@@ -513,4 +511,4 @@ Common requested changes and where to make them:
 
 ## 14. Short summary for fast onboarding
 
-This project is a small, tested Vite/Tampermonkey userscript that attaches only to supported `https://` Klassmatt item pages, injects a lightweight inline toggle near the native acompanhamento link, and starts with the persistent global `alwaysOpen` preference enabled on a clean install. Clean installs also default to `Amarelos`, so the first run shows only yellow comments unless the user switches to the full timeline. The Tampermonkey menu owns the persistent `alwaysOpen` setting, while the inline button only shows or hides the panel for the current item. When opened, it waits for a stable SIN context, fetches same-origin `Historico.aspx`, parses the strict timeline, and renders the acompanhamento inline in a right-side panel. Yellow notes are shown as dedicated note cards, rows mentioning `ncm`, `nbs`, `lei`, or matching codes are additionally highlighted in red, and rows whose only visible content is a yellow note are preserved. The current implementation explicitly protects against stale comments from a previously opened item during internal ASP.NET page switches, blocks cross-origin redirects before parsing, strips external links from the normal panel, redacts `k` from user-facing diagnostics, and uses manual recovery (`F5`, reopening the panel, `Ver inline`) instead of heavyweight automatic retry or background token refresh. The inline fallback now uses a sandboxed sanitized snapshot rather than the raw remote page, and the build pipeline emits metadata, immutable release artifacts, and SHA-256 checksums for controlled GitHub Pages publication. It was derived from the bigger `FISCAL 5.0` userscript, but reduced to the minimal architecture needed for this one feature.
+This project is a small, tested Vite/Tampermonkey userscript that attaches only to supported `https://` Klassmatt item pages and starts with the persistent global `alwaysOpen` preference enabled on a clean install. Clean installs also default to `Amarelos`, so the first run shows only yellow comments unless the user switches to the full timeline. The Tampermonkey menu owns the persistent `alwaysOpen` setting. When opened, it waits for a stable SIN context, fetches same-origin `Historico.aspx`, parses the strict timeline, and renders the acompanhamento inline in a right-side panel. Yellow notes are shown as dedicated note cards, rows mentioning `ncm`, `nbs`, `lei`, or matching codes are additionally highlighted in red, and rows whose only visible content is a yellow note are preserved. The current implementation explicitly protects against stale comments from a previously opened item during internal ASP.NET page switches, blocks cross-origin redirects before parsing, strips external links from the normal panel, redacts `k` from user-facing diagnostics, and uses manual recovery (`F5`, reopening the panel, `Ver inline`) instead of heavyweight automatic retry or background token refresh. The inline fallback now uses a sandboxed sanitized snapshot rather than the raw remote page, and the build pipeline emits metadata, immutable release artifacts, and SHA-256 checksums for controlled GitHub Pages publication. It was derived from the bigger `FISCAL 5.0` userscript, but reduced to the minimal architecture needed for this one feature.

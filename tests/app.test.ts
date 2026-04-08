@@ -4,8 +4,6 @@ import { SinSidebarApp } from '../src/app';
 import { loadSettings, SETTINGS_KEY, type SinPanelSettings } from '../src/state';
 
 const fixturesDir = path.resolve(process.cwd(), 'tests', 'fixtures');
-const SHOW_PANEL_LABEL = 'Mostrar painel';
-const HIDE_PANEL_LABEL = 'Ocultar painel';
 
 function readFixture(name: string): string {
   return fs.readFileSync(path.join(fixturesDir, name), 'utf8');
@@ -83,12 +81,6 @@ function buildHistoryResponse(body: string): Response {
     status: 200,
     headers: { 'content-type': 'text/html; charset=utf-8' }
   });
-}
-
-function buildAbortError(): Error {
-  const error = new Error('Aborted');
-  error.name = 'AbortError';
-  return error;
 }
 
 function dispatchSettingsStorageEvent(previousValue: string | null, nextValue: string): void {
@@ -172,15 +164,6 @@ async function initApp(options?: ConstructorParameters<typeof SinSidebarApp>[0])
   return app;
 }
 
-async function openPanel(): Promise<void> {
-  const toggle = document.querySelector<HTMLButtonElement>('.km-sin-toggle');
-  if (toggle?.getAttribute('aria-pressed') !== 'true') {
-    toggle.click();
-    await flush();
-    await flush();
-  }
-}
-
 describe('SinSidebarApp', () => {
   beforeEach(() => {
     localStorage.clear();
@@ -207,7 +190,7 @@ describe('SinSidebarApp', () => {
     expect(document.querySelector('.km-sin-title')?.textContent).toBe('KM Acompanhamento');
     expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
     expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(HIDE_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
     app.destroy();
   });
@@ -221,7 +204,7 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(HIDE_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Tudo');
     app.destroy();
   });
@@ -266,11 +249,11 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(0);
     expect(document.querySelector('.km-sin-layout')).toBeNull();
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(SHOW_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     app.destroy();
   });
 
-  it('opens the panel only for the current item when always-open is disabled', async () => {
+  it('keeps the panel closed when always-open is disabled', async () => {
     setSettings({ alwaysOpen: false, timelineMode: 'all' });
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input);
@@ -294,22 +277,17 @@ describe('SinSidebarApp', () => {
     const app = await initApp({ hookAspNet: false });
 
     expect(fetchMock).toHaveBeenCalledTimes(0);
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(SHOW_PANEL_LABEL);
-
-    await openPanel();
-
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(HIDE_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-layout')).toBeNull();
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     expect(loadSettings()).toEqual({ alwaysOpen: false, timelineMode: 'all' });
 
     document.body.innerHTML = buildItemPage({ sinId: '209356' });
     window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=209356');
     await app.hydrate(true);
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(0);
     expect(document.querySelector('.km-sin-layout')).toBeNull();
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(SHOW_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     app.destroy();
   });
 
@@ -398,8 +376,8 @@ describe('SinSidebarApp', () => {
 
     const secondApp = await initApp({ hookAspNet: false });
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(HIDE_PANEL_LABEL);
     expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     secondApp.destroy();
   });
 
@@ -439,7 +417,6 @@ describe('SinSidebarApp', () => {
 
     const app = await initApp({ hookAspNet: false });
     expect(fetchMock).toHaveBeenCalledTimes(0);
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(SHOW_PANEL_LABEL);
 
     const previousValue = JSON.stringify({ alwaysOpen: false, timelineMode: 'all' });
     const nextValue = JSON.stringify({ alwaysOpen: true, timelineMode: 'all' });
@@ -450,7 +427,7 @@ describe('SinSidebarApp', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(HIDE_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     app.destroy();
   });
 
@@ -468,19 +445,18 @@ describe('SinSidebarApp', () => {
     await flush();
 
     expect(document.querySelector('.km-sin-aside')?.hasAttribute('hidden')).toBe(true);
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(SHOW_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     app.destroy();
   });
 
   it('shows iframe fallback only after explicit user action when the fetch fails', async () => {
-    setSettings({ alwaysOpen: false, timelineMode: 'all' });
+    setSettings({ alwaysOpen: true, timelineMode: 'all' });
     const fetchMock = vi.fn(async () => {
       throw new TypeError('Failed to fetch');
     });
     vi.stubGlobal('fetch', fetchMock);
 
     const app = await initApp({ hookAspNet: false });
-    await openPanel();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-frame')).toBeNull();
@@ -592,7 +568,6 @@ describe('SinSidebarApp', () => {
     });
 
     const app = await initApp({ hookAspNet: false });
-    await openPanel();
 
     expect(fetchMock).toHaveBeenCalledTimes(0);
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(0);
@@ -635,7 +610,6 @@ describe('SinSidebarApp', () => {
     vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(readFixture('hist-loose.html'))));
 
     const app = await initApp({ hookAspNet: false });
-    await openPanel();
 
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(0);
     expect(document.querySelector('.km-sin-state')?.textContent).toContain('bloqueado');
@@ -648,7 +622,6 @@ describe('SinSidebarApp', () => {
     vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(buildLargeHistory(40))));
 
     const app = await initApp({ hookAspNet: false });
-    await openPanel();
 
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(30);
     const loadMoreButton = document.querySelector<HTMLButtonElement>('[data-act="load-more"]');
@@ -663,53 +636,21 @@ describe('SinSidebarApp', () => {
     app.destroy();
   });
 
-  it('hides the panel only for the current item and keeps always-open enabled globally', async () => {
+  it('does not render a page toggle when the panel is controlled globally', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
-    let aborted = false;
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      const signal = init?.signal as AbortSignal | undefined;
-
-      if (url.includes('Id=209356')) {
-        return Promise.resolve(buildHistoryResponse(wrapHistoryHtml(`
-          <fieldset class="hist-fieldset">
-            <legend class="hist-legend">sexta-feira, 13 de fevereiro de 2026</legend>
-            <div class="row"><a id="hlinkUsuario">BIA.TESTE*</a></div>
-            <div class="row result">
-              <span id="lblHora">11:00:00</span>
-              <span id="lblDescricao">Solicitacao enviada para FISCAL-INTEGRA</span>
-            </div>
-          </fieldset>
-        `, 'source=SIN&Id=209356&SomenteLeitura=1')));
-      }
-
-      return new Promise<Response>((resolve, reject) => {
-        signal?.addEventListener('abort', () => {
-          aborted = true;
-          reject(buildAbortError());
-        }, { once: true });
-      });
-    });
-    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(readFixture('hist-strict.html'))));
 
     const app = await initApp({ hookAspNet: false });
-    const toggle = document.querySelector<HTMLButtonElement>('.km-sin-toggle');
-    toggle?.click();
-    await flush();
 
-    expect(aborted).toBe(true);
-    expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'all' });
-    expect(document.querySelector('.km-sin-aside')?.hasAttribute('hidden')).toBe(true);
-    expect(document.querySelector('.km-sin-body')?.textContent).toBe('');
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(SHOW_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-layout')).not.toBeNull();
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
 
     document.body.innerHTML = buildItemPage({ sinId: '209356' });
     window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=209356');
     await app.hydrate(true);
 
-    expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-toggle')?.textContent).toBe(HIDE_PANEL_LABEL);
+    expect(document.querySelector('.km-sin-toggle')).toBeNull();
     app.destroy();
   });
 
@@ -770,7 +711,6 @@ describe('SinSidebarApp', () => {
     vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(noYellowHistory)));
 
     const app = await initApp({ hookAspNet: false });
-    await openPanel();
 
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
     expect(document.querySelector('.km-sin-empty')).toBeNull();

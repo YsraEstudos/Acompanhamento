@@ -23,10 +23,6 @@ export function getAlwaysOpenMenuLabel(alwaysOpen: boolean): string {
     : 'Ativar acompanhamento sempre visivel';
 }
 
-export function getInlinePanelToggleLabel(panelOpen: boolean): string {
-  return panelOpen ? 'Ocultar painel' : 'Mostrar painel';
-}
-
 export function loadSettings(): SinPanelSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);

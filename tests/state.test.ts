@@ -1,6 +1,5 @@
 import {
   getAlwaysOpenMenuLabel,
-  getInlinePanelToggleLabel,
   loadSettings,
   saveSettings,
   SETTINGS_KEY
@@ -29,10 +28,8 @@ describe('sidebar settings', () => {
     expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
   });
 
-  it('exposes separate labels for the menu and the inline panel toggle', () => {
+  it('exposes the menu labels for the global always-open preference', () => {
     expect(getAlwaysOpenMenuLabel(true)).toBe('Desativar acompanhamento sempre visivel');
     expect(getAlwaysOpenMenuLabel(false)).toBe('Ativar acompanhamento sempre visivel');
-    expect(getInlinePanelToggleLabel(true)).toBe('Ocultar painel');
-    expect(getInlinePanelToggleLabel(false)).toBe('Mostrar painel');
   });
 });
