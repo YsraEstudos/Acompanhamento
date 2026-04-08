@@ -2,7 +2,7 @@
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
 // @version      1.0.6
-// @author       OpenAI Codex
+// @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
 // @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.6/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js

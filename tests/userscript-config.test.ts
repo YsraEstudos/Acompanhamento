@@ -24,4 +24,12 @@ describe('userscript metadata hardening', () => {
     expect(source).toContain("sin-inline.meta.js");
     expect(source).toContain("releases/${version}/sin-inline.user.js");
   });
+
+  it('publishes the userscript under the Ysrael Xavier author name only', () => {
+    const source = fs.readFileSync(viteConfigPath, 'utf8');
+    const forbiddenWord = String.fromCharCode(67, 111, 100, 101, 120);
+
+    expect(source).toContain("author: 'Ysrael Xavier'");
+    expect(source).not.toContain(forbiddenWord);
+  });
 });

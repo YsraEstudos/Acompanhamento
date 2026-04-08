@@ -2,7 +2,7 @@
 // @name         KM SIN Sidebar
 // @namespace    http://tampermonkey.net/
 // @version      1.0.3
-// @author       OpenAI Codex
+// @author       Ysrael Xavier
 // @description  Exibe o Acompanhamento da SIN inline na página do item do Klassmatt.
 // @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.3/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
