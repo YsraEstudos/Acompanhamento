@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         KM SIN Sidebar
 // @namespace    http://tampermonkey.net/
-// @version      1.0.0
+// @version      1.0.2
 // @author       OpenAI Codex
 // @description  Exibe o Acompanhamento da SIN inline na página do item do Klassmatt.
 // @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
@@ -543,8 +543,8 @@
   const SETTINGS_KEY = "km_sin_sidebar_settings_v1";
   const SETTINGS_CHANGED_EVENT = "km-sin-sidebar-settings-changed";
   const DEFAULT_SETTINGS = {
-    alwaysOpen: false,
-    timelineMode: "all"
+    alwaysOpen: true,
+    timelineMode: "yellow-only"
   };
   function normalizeTimelineMode(value) {
     return value === "yellow-only" ? "yellow-only" : "all";
