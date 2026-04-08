@@ -2,10 +2,10 @@
 // @name         KM SIN Sidebar
 // @namespace    http://tampermonkey.net/
 // @version      1.0.0
-// @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
 // @author       OpenAI Codex
 // @description  Exibe o Acompanhamento da SIN inline na página do item do Klassmatt.
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
+// @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
 // @match        *://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        *://*.klassmatt.com.br/*ITEM_Edita.aspx*
 // @match        *://klassmatt.com.br/*SIN_Item_Edita.aspx*
