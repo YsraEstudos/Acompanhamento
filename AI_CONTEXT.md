@@ -8,6 +8,7 @@
 - Current release version: `1.0.9`
 - Current output file: `dist/sin-inline.user.js`
 - Public install URL: `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
+- Canonical GitHub remote: `https://github.com/YsraEstudos/km-sin-sidebar-userscript`
 - Convenience build script: `build-userscript.bat`
 
 This project is a focused extraction of one capability from a larger userscript ecosystem: showing the SIN acompanhamento inline on the item page, without opening the Klassmatt popup.
@@ -24,6 +25,8 @@ The current product decision is important:
 - Events whose visible content is only a yellow note are still preserved and rendered.
 - Se o historico realmente estiver vazio (nenhum evento), exibe um empty state.
 - During internal ASP.NET item switches, the panel must never reuse comments from the previous item.
+- The active item root is now chosen by combining the current `IdItem`/`IdSIN` hints, the visible `#txtNumero`, and summary/link consistency, so a stale `#hlkObs` from a previous item loses to the live root.
+- The runtime now watches DOM mutations plus `popstate`/`hashchange`, which lets it clear or refresh stale state even when Klassmatt swaps the item without a clean `endRequest`.
 - Fetch of the history bypasses HTTP caching (`no-store`) to prevent stale UI state across items.
 - The script must wait for a stable SIN context before fetching `Historico.aspx`.
 - The raw popup remains available through the native site link, while the panel's `Ver inline` fallback now renders a sandboxed sanitized snapshot in read-only mode.
@@ -100,6 +103,7 @@ Relevant structure observed in saved Klassmatt HTML:
 - `#DV_Resumo_sin` is the SIN summary block near the acompanhamento link.
 - `#Label_infoSIN` contains visible SIN metadata and can be used as fallback for the SIN number.
 - `#txtNumero` is the Klassmatt item ID, not the SIN number, and must not be used to build `Historico.aspx`.
+- When multiple `.kl-view` blocks remain in the DOM during a partial update, prefer the visible root whose `#txtNumero` matches the current `IdItem` and whose summary data matches `IdSIN`.
 
 ### 4.3 Acompanhamento link behavior
 
@@ -187,6 +191,8 @@ During ASP.NET partial updates:
 - the panel clears previous comments instead of keeping stale results on screen
 - fetches from the previous item are aborted and ignored if they resolve late
 - confirmTrustedContext uses a single short revalidation instead of progressive retries
+- the current context key now includes `itemId`, `summarySinId`, and the history identity, which means switching to a different item clears local open/close overrides
+- a `MutationObserver` now retriggers hydration when Klassmatt swaps the item DOM in place, even if the page does not emit a clean `endRequest`
 
 If the timeline is empty (0 events):
 
@@ -269,6 +275,7 @@ User preference is stored in localStorage:
   - detect `#hButAcompanhamentoSIN` / `#hlkObs`
   - extract URL from `OpenWindowsWHR(...)`
   - resolve `itemId` separately from `sinId`
+  - score the active item root using `IdItem`, `IdSIN`, `#txtNumero`, and visible summary/link consistency so stale copies lose to the live item
   - resolve SIN ID from the acompanhamento link or `#Label_infoSIN`
   - detect whether the page context is stable enough to fetch
   - return `SinPageContext`
@@ -395,6 +402,8 @@ Expected built artifact:
 ### 8.1 Release and distribution
 
 The project now uses a private GitHub repo plus GitHub Pages as the distribution channel.
+The canonical remote is `https://github.com/YsraEstudos/km-sin-sidebar-userscript` and GitHub redirected from the older lowercase URL.
+GitHub Pages serves the root copies of `sin-inline.user.js`, `sin-inline.meta.js`, `latest.json`, and `releases/<version>/...`; `dist/` remains the local build mirror.
 
 - Source repo: `https://github.com/YsraEstudos/km-sin-sidebar-userscript`
 - Public install URL: `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
@@ -405,6 +414,11 @@ Release flow:
 2. Bump the userscript `@version` in `vite.config.ts`.
 3. Run `npm run build`.
 4. Publish the generated GitHub Pages bundle:
+   - `sin-inline.user.js`
+   - `sin-inline.meta.js`
+   - `latest.json`
+   - `releases/<version>/sin-inline.user.js`
+   - `releases/<version>/SHA256SUMS.txt`
    - `dist/sin-inline.user.js`
    - `dist/sin-inline.meta.js`
    - `dist/latest.json`
@@ -436,6 +450,7 @@ What is covered:
 - page context resolution from real-like item DOM
 - not using `#txtNumero` as SIN fallback
 - unstable-context detection when link/summary are missing or inconsistent
+- preferring the visible current item root when stale copies remain in the DOM
 - strict history parsing
 - loose history parsing
 - attention-highlight detection for `ncm`, `nbs`, `lei`, and code-like values
@@ -451,6 +466,8 @@ What is covered:
 - persistent `Tudo` / `Amarelos` mode button behavior
 - clearing stale comments during internal item switches
 - ignoring late results from aborted fetches of the previous item
+- clearing stale comments when the DOM switches to a different item without a trusted link yet
+- refreshing the open panel when the item changes via DOM mutation only
 - UI rendering without duplicating yellow-note text in the main description
 - detection of Klassmatt error pages (`Erro.aspx`) in the response body
 - detection of `d-error` divs with authorization/exception messages
@@ -484,6 +501,7 @@ What is covered:
 - Attention-highlight code matching is intentionally broad for 8+ digit code-like values, so unusual numeric text could still be flagged if it resembles an NCM/NBS code.
 - If `Historico.aspx` markup changes substantially, parsing may fail and the project will fallback to the sanitized read-only snapshot.
 - If the page has no valid SIN link and no visible SIN metadata, the panel will wait in an unstable state instead of guessing from item fields.
+- If Klassmatt renames or removes `IdItem`, `IdSIN`, `#txtNumero`, `#Label_infoSIN`, or the native acompanhamento link IDs, the context scorer will need an update; it intentionally prefers the visible live root over stale hidden copies.
 - The parser now preserves events whose visible description is only a yellow note. Avoid reintroducing any filter that drops those rows because the plain description text is empty.
 - When the Klassmatt session expires or the `k` token becomes invalid, the server often returns HTTP 200 with an `Erro.aspx` body instead of HTTP 401/403. The script detects this and surfaces a `session-error` state with actionable recovery guidance; the user still needs to recarregar a pagina or reopen the panel.
 - Silent HTTP redirects (to `Login.aspx`, `Erro.aspx`, etc.) are also detected via `response.redirected` and `response.url`, and cross-origin redirects are blocked before parsing.
@@ -516,4 +534,12 @@ Common requested changes and where to make them:
 
 ## 14. Short summary for fast onboarding
 
-This project is a small, tested Vite/Tampermonkey userscript that attaches only to supported `https://` Klassmatt item pages, starts with the persistent global `alwaysOpen` preference enabled on a clean install, and also injects an item-level `Mostrar painel` / `Ocultar painel` toggle near the native link. Clean installs also default to `Amarelos`, so the first run shows only yellow comments unless the user switches to the full timeline. The Tampermonkey menu owns the persistent `alwaysOpen` setting, while the inline toggle is only a temporary override for the current item. When opened, it waits for a stable SIN context, fetches same-origin `Historico.aspx`, parses the strict timeline, and renders the acompanhamento inline in a right-side panel. Yellow notes are shown as dedicated note cards, rows mentioning `ncm`, `nbs`, `lei`, or matching codes are additionally highlighted in red, and rows whose only visible content is a yellow note are preserved. The current implementation explicitly protects against stale comments from a previously opened item during internal ASP.NET page switches, blocks cross-origin redirects before parsing, strips external links from the normal panel, redacts `k` from user-facing diagnostics, and uses manual recovery (`F5`, reopening the panel, `Ver inline`) instead of heavyweight automatic retry or background token refresh. The inline fallback now uses a sandboxed sanitized snapshot rather than the raw remote page, and the build pipeline emits metadata, immutable release artifacts, and SHA-256 checksums for controlled GitHub Pages publication. It was derived from the bigger `FISCAL 5.0` userscript, but reduced to the minimal architecture needed for this one feature.
+This project is a small, tested Vite/Tampermonkey userscript that attaches only to supported `https://` Klassmatt item pages, starts with the persistent global `alwaysOpen` preference enabled on a clean install, and also injects an item-level `Mostrar painel` / `Ocultar painel` toggle near the native link. Clean installs also default to `Amarelos`, so the first run shows only yellow comments unless the user switches to the full timeline. The Tampermonkey menu owns the persistent `alwaysOpen` setting, while the inline toggle is only a temporary override for the current item. When opened, it waits for a stable SIN context, resolves the active item root using the current `IdItem`/`IdSIN` hints plus the visible `#txtNumero`, fetches same-origin `Historico.aspx`, parses the strict timeline, and renders the acompanhamento inline in a right-side panel. Yellow notes are shown as dedicated note cards, rows mentioning `ncm`, `nbs`, `lei`, or matching codes are additionally highlighted in red, and rows whose only visible content is a yellow note are preserved. The current implementation explicitly protects against stale comments from a previously opened item during internal ASP.NET page switches, including DOM-only item swaps, blocks cross-origin redirects before parsing, strips external links from the normal panel, redacts `k` from user-facing diagnostics, and uses manual recovery (`F5`, reopening the panel, `Ver inline`) instead of heavyweight automatic retry or background token refresh. The inline fallback now uses a sandboxed sanitized snapshot rather than the raw remote page, and the build pipeline emits metadata, immutable release artifacts, and SHA-256 checksums for controlled GitHub Pages publication. The canonical repo remote moved to `https://github.com/YsraEstudos/km-sin-sidebar-userscript`, and the published assets live at the Pages root with `dist/` kept as the local build mirror. It was derived from the bigger `FISCAL 5.0` userscript, but reduced to the minimal architecture needed for this one feature.
+
+## 15. Recent investigation notes
+
+- The reported production bug was a stale-context issue, not a parser bug in the `Historico.aspx` HTML itself.
+- On the inspected live item page, `IdItem=244350` and `IdSIN=24475` were both present, and `#txtNumero` held the item ID (`244350`), not the SIN. That field is only a selection hint for the active root.
+- The new resolver scoring intentionally prefers the visible live `.kl-view` whose item field and summary data match the current page hints, so hidden or stale copies from the previous item no longer win.
+- The runtime now rehydrates or clears stale state when the DOM changes in place via `MutationObserver`, `popstate`, or `hashchange`, which covers Klassmatt item swaps that do not emit a clean `endRequest`.
+- The repo was pushed successfully to the moved remote, and the repository URL now resolves through the uppercase `YsraEstudos` location.
