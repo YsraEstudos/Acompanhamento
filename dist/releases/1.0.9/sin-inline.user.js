@@ -1013,6 +1013,29 @@
     });
     return best;
   }
+  function getSearchParamInsensitive(url, name) {
+    const expected = name.toLowerCase();
+    for (const [key, value] of url.searchParams.entries()) {
+      if (key.toLowerCase() !== expected) continue;
+      const normalized = normalizeSpaces(value);
+      return normalized || null;
+    }
+    return null;
+  }
+  function getCurrentLocationHints() {
+    try {
+      const url = new URL(window.location.href);
+      return {
+        itemId: getSearchParamInsensitive(url, "IdItem"),
+        sinId: getSearchParamInsensitive(url, "IdSIN")
+      };
+    } catch {
+      return {
+        itemId: null,
+        sinId: null
+      };
+    }
+  }
   function absolutizeUrl(url) {
     try {
       return new URL(String(url ?? ""), window.location.href).toString();
@@ -1064,12 +1087,36 @@
     const infoMatch = infoText.match(/\bSIN:\s*(\d+)/i);
     return infoMatch?.[1] ? infoMatch[1] : null;
   }
+  function findPrimaryItemField() {
+    const locationHints = getCurrentLocationHints();
+    const candidates = Array.from(document.querySelectorAll('#txtNumero, input[name$="txtNumero"]'));
+    return pickBestElement(candidates, (input) => {
+      let score = getCandidateScore(input);
+      const value = normalizeSpaces(input.value);
+      if (value) score += 20;
+      if (locationHints.itemId && value === locationHints.itemId) score += 40;
+      return score;
+    });
+  }
   function findBestViewRoot() {
+    const locationHints = getCurrentLocationHints();
+    const primaryItemField = findPrimaryItemField();
     const candidates = Array.from(document.querySelectorAll("#UpdatePanel1 .kl-view, .kl-view"));
     return pickBestElement(candidates, (element) => getCandidateScore(element, {
       hasLink: Boolean(element.querySelector("#hButAcompanhamentoSIN, #hlkObs")),
       hasSummaryLabel: Boolean(element.querySelector("#Label_infoSIN"))
-    }));
+    }) + (() => {
+      let bonus = 0;
+      const rootItemId = extractItemId(element);
+      const rootSummary = element.querySelector("#DV_Resumo_sin");
+      const rootSummarySinId = extractSinIdFromSummary(rootSummary);
+      if (primaryItemField && element.contains(primaryItemField)) bonus += 80;
+      if (rootItemId) bonus += 12;
+      if (rootSummarySinId) bonus += 8;
+      if (locationHints.itemId && rootItemId && rootItemId === locationHints.itemId) bonus += 40;
+      if (locationHints.sinId && rootSummarySinId && rootSummarySinId === locationHints.sinId) bonus += 25;
+      return bonus;
+    })());
   }
   function findBestSummary(scope) {
     const candidates = Array.from(scope.querySelectorAll("#DV_Resumo_sin"));
@@ -1079,13 +1126,13 @@
     }));
   }
   function findQuickViewRoot() {
-    return document.querySelector("#UpdatePanel1 .kl-view, .kl-view");
+    return findBestViewRoot();
   }
   function findQuickSummary(scope) {
-    return scope.querySelector("#DV_Resumo_sin");
+    return findBestSummary(scope);
   }
   function findDirectHistoryLink(root) {
-    return root.querySelector("#hButAcompanhamentoSIN, #hlkObs");
+    return findHistoryLink(root);
   }
   function resolvePageContext() {
     const viewRoot = findBestViewRoot();
@@ -1120,11 +1167,15 @@
     const scope = viewRoot ?? document;
     const summaryEl = findQuickSummary(scope);
     const linkEl = summaryEl ? findDirectHistoryLink(summaryEl) || findDirectHistoryLink(scope) : findDirectHistoryLink(scope);
+    const itemId = extractItemId(scope);
+    const summarySinId = extractSinIdFromSummary(summaryEl);
     const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute("href")) : null;
     return {
+      itemId,
       historyUrl: historyIdentity?.absoluteUrl || null,
       historyIdentity,
-      sinId: historyIdentity?.id || extractSinIdFromSummary(summaryEl),
+      sinId: historyIdentity?.id || summarySinId,
+      summarySinId,
       viewRoot,
       summaryEl,
       linkEl
@@ -1221,6 +1272,7 @@
     inlinePanelOverride = null;
     panelOpen = this.settings.alwaysOpen;
     currentContextKey = null;
+    observedContextSignature = null;
     toggleHost = null;
     toggleButton = null;
     toggleParent = null;
@@ -1288,6 +1340,7 @@
       }
       this.syncSettingsFromStorage();
       const quickContext = resolveQuickPageContext();
+      this.observedContextSignature = this.captureContextSignature(quickContext);
       this.syncContextScope(quickContext);
       if (this.panelOpen) {
         void this.hydrate(true);
@@ -1686,7 +1739,12 @@
       this.panelOpen = this.inlinePanelOverride ?? this.settings.alwaysOpen;
     }
     getContextScopeKey(context) {
-      return context.historyIdentity?.fingerprint || context.sinId || context.historyUrl || null;
+      const identityScope = context.historyIdentity?.fingerprint || context.historyUrl || context.sinId || context.summarySinId || null;
+      if (!identityScope && !context.itemId) return null;
+      return [
+        context.itemId || "sem-item",
+        identityScope || "sem-contexto"
+      ].join("|");
     }
     syncContextScope(context) {
       const nextContextKey = this.getContextScopeKey(context);
@@ -1751,6 +1809,14 @@
       this.activeFetch = null;
       this.activeFetchKey = null;
     }
+    captureContextSignature(context = resolveQuickPageContext()) {
+      return [
+        window.location.href,
+        context.itemId || "sem-item",
+        context.summarySinId || "sem-sin-resumo",
+        context.historyIdentity?.fingerprint || context.historyUrl || context.sinId || "sem-historico"
+      ].join("|");
+    }
     async confirmTrustedContext(context, serial) {
       if (context.isStable && context.historyIdentity?.fingerprint) {
         return context;
@@ -1801,11 +1867,47 @@
       }
     }
     bindContextEvents() {
+      let disposed = false;
+      let mutationObserver = null;
+      let mutationTimer = 0;
+      const observeRoot = document.body ?? document.documentElement;
+      const timerHost = observeRoot.ownerDocument?.defaultView ?? globalThis;
+      const handleMutation = () => {
+        if (disposed) return;
+        mutationTimer = 0;
+        const nextSignature = this.captureContextSignature();
+        if (nextSignature === this.observedContextSignature) return;
+        this.observedContextSignature = nextSignature;
+        this.handlePageLifecycleEvent();
+      };
       window.addEventListener("storage", this.handleStorageEvent);
       window.addEventListener("pageshow", this.handlePageLifecycleEvent);
+      window.addEventListener("popstate", this.handlePageLifecycleEvent);
+      window.addEventListener("hashchange", this.handlePageLifecycleEvent);
+      if (observeRoot) {
+        this.observedContextSignature = this.captureContextSignature();
+        mutationObserver = new MutationObserver(() => {
+          if (mutationTimer) return;
+          mutationTimer = timerHost.setTimeout(handleMutation, 80);
+        });
+        mutationObserver.observe(observeRoot, {
+          childList: true,
+          subtree: true,
+          characterData: true,
+          attributes: true,
+          attributeFilter: ["href", "value", "style", "class", "hidden"]
+        });
+      }
       return () => {
+        disposed = true;
+        if (mutationTimer) {
+          timerHost.clearTimeout(mutationTimer);
+        }
+        mutationObserver?.disconnect();
         window.removeEventListener("storage", this.handleStorageEvent);
         window.removeEventListener("pageshow", this.handlePageLifecycleEvent);
+        window.removeEventListener("popstate", this.handlePageLifecycleEvent);
+        window.removeEventListener("hashchange", this.handlePageLifecycleEvent);
       };
     }
     bindAspNetEndRequest() {

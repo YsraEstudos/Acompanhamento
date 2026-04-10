@@ -172,4 +172,34 @@ describe('history URL helpers', () => {
     expect(context.historyIdentity?.id).toBe('84413');
     expect(context.historyUrl).toContain('Id=84413');
   });
+
+  it('prefers the current item root even when an older visible root still exposes a stale link', () => {
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=300892&IdSIN=84413');
+    document.body.innerHTML = `
+      <div id="UpdatePanel1">
+        <div class="kl-view">
+          <input id="txtNumero" value="300891">
+          <div id="DV_Resumo_sin">
+            <span id="Label_infoSIN"><b>SIN:</b> 84429</span>
+            <a id="hlkObs" href="javascript:{OpenWindowsWHR('Historico.aspx?source=SIN&Id=84429&SomenteLeitura=1', 680, 500, 1)}">Acompanhamento</a>
+          </div>
+        </div>
+        <div class="kl-view">
+          <input id="txtNumero" value="300892">
+          <div id="DV_Resumo_sin">
+            <span id="Label_infoSIN"><b>SIN:</b> 84413</span>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const context = resolvePageContext();
+
+    expect(context.itemId).toBe('300892');
+    expect(context.sinId).toBe('84413');
+    expect(context.summarySinId).toBe('84413');
+    expect(context.historyIdentity).toBeNull();
+    expect(context.historyUrl).toBeNull();
+    expect(context.isStable).toBe(false);
+  });
 });

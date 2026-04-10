@@ -5,6 +5,7 @@
 - Workspace root: `C:\Users\israe\OneDrive\Documentos\Projetos\Trabalho\Acompanhamento`
 - Deliverable: standalone Tampermonkey userscript built with Vite and published through a private GitHub repo + GitHub Pages
 - Runtime target: Klassmatt item pages on `https://*.klassmatt.com.br/*`
+- Current release version: `1.0.9`
 - Current output file: `dist/sin-inline.user.js`
 - Public install URL: `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
 - Convenience build script: `build-userscript.bat`
@@ -26,6 +27,7 @@ The current product decision is important:
 - Fetch of the history bypasses HTTP caching (`no-store`) to prevent stale UI state across items.
 - The script must wait for a stable SIN context before fetching `Historico.aspx`.
 - The raw popup remains available through the native site link, while the panel's `Ver inline` fallback now renders a sandboxed sanitized snapshot in read-only mode.
+- On Chrome, Tampermonkey may require `Allow User Scripts` in the extension details page. If the userscript still does not inject after enabling it, restart Chrome completely and confirm that the installed script version is `1.0.9`.
 
 ## 2. Why this project exists
 

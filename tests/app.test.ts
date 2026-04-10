@@ -487,6 +487,87 @@ describe('SinSidebarApp', () => {
     app.destroy();
   });
 
+  it('clears stale comments when the DOM switches to a different item without a trusted link yet', async () => {
+    vi.useFakeTimers();
+
+    setSettings({ alwaysOpen: true, timelineMode: 'all' });
+    const fetchMock = vi.fn(async () => buildHistoryResponse(readFixture('hist-strict.html')));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = new SinSidebarApp({ hookAspNet: false });
+    app.init();
+    await vi.advanceTimersByTimeAsync(220);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll('.km-sin-item').length).toBeGreaterThan(0);
+
+    document.body.innerHTML = buildItemPage({
+      sinId: '209356',
+      itemId: '300892',
+      includeLink: false,
+      includeLabel: true
+    });
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=300892&IdSIN=209356');
+
+    await vi.advanceTimersByTimeAsync(220);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(0);
+    expect(document.querySelector('.km-sin-state')?.textContent || '').toContain('link nativo');
+    expect(document.querySelector('.km-sin-empty')?.textContent || '').toContain('link nativo');
+    app.destroy();
+  });
+
+  it('refreshes the open panel when the item changes via DOM mutation only', async () => {
+    vi.useFakeTimers();
+
+    setSettings({ alwaysOpen: true, timelineMode: 'all' });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('Id=209356')) {
+        return buildHistoryResponse(wrapHistoryHtml(`
+          <fieldset class="hist-fieldset">
+            <legend class="hist-legend">sexta-feira, 13 de fevereiro de 2026</legend>
+            <div class="row"><a id="hlinkUsuario">BIA.TESTE*</a></div>
+            <div class="row result">
+              <span id="lblHora">11:00:00</span>
+              <span id="lblDescricao">Solicitacao enviada para FISCAL-INTEGRA</span>
+            </div>
+          </fieldset>
+        `, 'source=SIN&Id=209356&SomenteLeitura=1'));
+      }
+
+      return buildHistoryResponse(readFixture('hist-strict.html'));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = new SinSidebarApp({ hookAspNet: false });
+    app.init();
+    await vi.advanceTimersByTimeAsync(120);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.km-sin-meta')?.textContent || '').toContain('SIN 209355');
+
+    document.body.innerHTML = buildItemPage({
+      sinId: '209356',
+      itemId: '300892',
+      includeLink: true,
+      includeLabel: true
+    });
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=300892&IdSIN=209356');
+
+    await vi.advanceTimersByTimeAsync(120);
+    await flushMicrotasks();
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(document.querySelector('.km-sin-meta')?.textContent || '').toContain('SIN 209356');
+    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
+    app.destroy();
+  });
+
   it('persists the always-open preference together with the timeline mode', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
     const fetchMock = vi.fn(async () => buildHistoryResponse(mixedHistory));

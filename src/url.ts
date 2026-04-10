@@ -17,9 +17,11 @@ export interface SinPageContext {
 }
 
 export interface QuickSinPageContext {
+  itemId: string | null;
   historyUrl: string | null;
   historyIdentity: HistoryIdentity | null;
   sinId: string | null;
+  summarySinId: string | null;
   viewRoot: HTMLElement | null;
   summaryEl: HTMLElement | null;
   linkEl: HTMLAnchorElement | null;
@@ -58,6 +60,32 @@ function pickBestElement<T extends HTMLElement>(candidates: T[], scorer: (elemen
   });
 
   return best;
+}
+
+function getSearchParamInsensitive(url: URL, name: string): string | null {
+  const expected = name.toLowerCase();
+  for (const [key, value] of url.searchParams.entries()) {
+    if (key.toLowerCase() !== expected) continue;
+    const normalized = normalizeSpaces(value);
+    return normalized || null;
+  }
+
+  return null;
+}
+
+function getCurrentLocationHints(): { itemId: string | null; sinId: string | null } {
+  try {
+    const url = new URL(window.location.href);
+    return {
+      itemId: getSearchParamInsensitive(url, 'IdItem'),
+      sinId: getSearchParamInsensitive(url, 'IdSIN')
+    };
+  } catch {
+    return {
+      itemId: null,
+      sinId: null
+    };
+  }
 }
 
 export function absolutizeUrl(url: string | null | undefined): string | null {
@@ -124,12 +152,41 @@ function extractSinIdFromSummary(summaryEl: ParentNode | null): string | null {
   return infoMatch?.[1] ? infoMatch[1] : null;
 }
 
+function findPrimaryItemField(): HTMLInputElement | null {
+  const locationHints = getCurrentLocationHints();
+  const candidates = Array.from(document.querySelectorAll<HTMLInputElement>('#txtNumero, input[name$="txtNumero"]'));
+
+  return pickBestElement(candidates, (input) => {
+    let score = getCandidateScore(input);
+    const value = normalizeSpaces(input.value);
+    if (value) score += 20;
+    if (locationHints.itemId && value === locationHints.itemId) score += 40;
+    return score;
+  });
+}
+
 function findBestViewRoot(): HTMLElement | null {
+  const locationHints = getCurrentLocationHints();
+  const primaryItemField = findPrimaryItemField();
   const candidates = Array.from(document.querySelectorAll<HTMLElement>('#UpdatePanel1 .kl-view, .kl-view'));
+
   return pickBestElement(candidates, (element) => getCandidateScore(element, {
     hasLink: Boolean(element.querySelector('#hButAcompanhamentoSIN, #hlkObs')),
     hasSummaryLabel: Boolean(element.querySelector('#Label_infoSIN'))
-  }));
+  }) + (() => {
+    let bonus = 0;
+    const rootItemId = extractItemId(element);
+    const rootSummary = element.querySelector<HTMLElement>('#DV_Resumo_sin');
+    const rootSummarySinId = extractSinIdFromSummary(rootSummary);
+
+    if (primaryItemField && element.contains(primaryItemField)) bonus += 80;
+    if (rootItemId) bonus += 12;
+    if (rootSummarySinId) bonus += 8;
+    if (locationHints.itemId && rootItemId && rootItemId === locationHints.itemId) bonus += 40;
+    if (locationHints.sinId && rootSummarySinId && rootSummarySinId === locationHints.sinId) bonus += 25;
+
+    return bonus;
+  })());
 }
 
 function findBestSummary(scope: ParentNode): HTMLElement | null {
@@ -141,15 +198,15 @@ function findBestSummary(scope: ParentNode): HTMLElement | null {
 }
 
 function findQuickViewRoot(): HTMLElement | null {
-  return document.querySelector<HTMLElement>('#UpdatePanel1 .kl-view, .kl-view');
+  return findBestViewRoot();
 }
 
 function findQuickSummary(scope: ParentNode): HTMLElement | null {
-  return scope.querySelector<HTMLElement>('#DV_Resumo_sin');
+  return findBestSummary(scope);
 }
 
 function findDirectHistoryLink(root: ParentNode): HTMLAnchorElement | null {
-  return root.querySelector<HTMLAnchorElement>('#hButAcompanhamentoSIN, #hlkObs');
+  return findHistoryLink(root);
 }
 
 export function resolvePageContext(): SinPageContext {
@@ -193,12 +250,16 @@ export function resolveQuickPageContext(): QuickSinPageContext {
   const linkEl = summaryEl
     ? (findDirectHistoryLink(summaryEl) || findDirectHistoryLink(scope))
     : findDirectHistoryLink(scope);
+  const itemId = extractItemId(scope);
+  const summarySinId = extractSinIdFromSummary(summaryEl);
   const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute('href')) : null;
 
   return {
+    itemId,
     historyUrl: historyIdentity?.absoluteUrl || null,
     historyIdentity,
-    sinId: historyIdentity?.id || extractSinIdFromSummary(summaryEl),
+    sinId: historyIdentity?.id || summarySinId,
+    summarySinId,
     viewRoot,
     summaryEl,
     linkEl

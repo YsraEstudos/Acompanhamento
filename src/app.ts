@@ -189,6 +189,7 @@ export class SinSidebarApp {
   private inlinePanelOverride: boolean | null = null;
   private panelOpen = this.settings.alwaysOpen;
   private currentContextKey: string | null = null;
+  private observedContextSignature: string | null = null;
   private toggleHost: HTMLSpanElement | null = null;
   private toggleButton: HTMLButtonElement | null = null;
   private toggleParent: HTMLElement | null = null;
@@ -268,6 +269,7 @@ export class SinSidebarApp {
 
     this.syncSettingsFromStorage();
     const quickContext = resolveQuickPageContext();
+    this.observedContextSignature = this.captureContextSignature(quickContext);
     this.syncContextScope(quickContext);
     if (this.panelOpen) {
       void this.hydrate(true);
@@ -746,7 +748,18 @@ export class SinSidebarApp {
   }
 
   private getContextScopeKey(context: QuickSinPageContext | SinPageContext): string | null {
-    return context.historyIdentity?.fingerprint || context.sinId || context.historyUrl || null;
+    const identityScope = context.historyIdentity?.fingerprint
+      || context.historyUrl
+      || context.sinId
+      || context.summarySinId
+      || null;
+
+    if (!identityScope && !context.itemId) return null;
+
+    return [
+      context.itemId || 'sem-item',
+      identityScope || 'sem-contexto'
+    ].join('|');
   }
 
   private syncContextScope(context: QuickSinPageContext | SinPageContext): void {
@@ -836,6 +849,15 @@ export class SinSidebarApp {
     this.activeFetchKey = null;
   }
 
+  private captureContextSignature(context: QuickSinPageContext = resolveQuickPageContext()): string {
+    return [
+      window.location.href,
+      context.itemId || 'sem-item',
+      context.summarySinId || 'sem-sin-resumo',
+      context.historyIdentity?.fingerprint || context.historyUrl || context.sinId || 'sem-historico'
+    ].join('|');
+  }
+
   private async confirmTrustedContext(context: SinPageContext, serial: number): Promise<SinPageContext | null> {
     if (context.isStable && context.historyIdentity?.fingerprint) {
       return context;
@@ -897,12 +919,52 @@ export class SinSidebarApp {
   }
 
   private bindContextEvents(): () => void {
+    let disposed = false;
+    let mutationObserver: MutationObserver | null = null;
+    let mutationTimer = 0;
+    const observeRoot = document.body ?? document.documentElement;
+    const timerHost = observeRoot.ownerDocument?.defaultView ?? globalThis;
+
+    const handleMutation = (): void => {
+      if (disposed) return;
+      mutationTimer = 0;
+      const nextSignature = this.captureContextSignature();
+      if (nextSignature === this.observedContextSignature) return;
+      this.observedContextSignature = nextSignature;
+      this.handlePageLifecycleEvent();
+    };
+
     window.addEventListener('storage', this.handleStorageEvent);
     window.addEventListener('pageshow', this.handlePageLifecycleEvent);
+    window.addEventListener('popstate', this.handlePageLifecycleEvent);
+    window.addEventListener('hashchange', this.handlePageLifecycleEvent);
+
+    if (observeRoot) {
+      this.observedContextSignature = this.captureContextSignature();
+      mutationObserver = new MutationObserver(() => {
+        if (mutationTimer) return;
+        mutationTimer = timerHost.setTimeout(handleMutation, 80);
+      });
+
+      mutationObserver.observe(observeRoot, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['href', 'value', 'style', 'class', 'hidden']
+      });
+    }
 
     return () => {
+      disposed = true;
+      if (mutationTimer) {
+        timerHost.clearTimeout(mutationTimer);
+      }
+      mutationObserver?.disconnect();
       window.removeEventListener('storage', this.handleStorageEvent);
       window.removeEventListener('pageshow', this.handlePageLifecycleEvent);
+      window.removeEventListener('popstate', this.handlePageLifecycleEvent);
+      window.removeEventListener('hashchange', this.handlePageLifecycleEvent);
     };
   }
 

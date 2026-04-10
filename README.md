@@ -4,12 +4,24 @@ Userscript para Klassmatt que mostra o KM Acompanhamento inline na pagina do ite
 
 ## Instalar e testar
 
+Versao atual: `1.0.9`.
+
 Use este link para instalar ou atualizar o script no Tampermonkey:
 
 - https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
 
 Instale uma vez. Depois disso, o Tampermonkey passa a checar atualizacoes automaticamente.
 Depois da instalacao, as checagens de update usam a metadata publicada em `sin-inline.meta.js` e baixam a versao nova do release versionado correspondente.
+
+Se voce estiver no Chrome e o script nao aparecer na pagina, faca este ajuste no navegador:
+
+1. Abra `chrome://extensions/`
+2. Abra os detalhes do `Tampermonkey`
+3. Ative `Allow User Scripts`
+4. Feche o Chrome completamente e abra de novo
+5. Volte ao item do Klassmatt e recarregue a pagina
+
+Se a versao instalada no Tampermonkey nao for `1.0.9`, atualize o userscript pelo link acima.
 
 Na primeira instalacao, o script ja entra com:
 
