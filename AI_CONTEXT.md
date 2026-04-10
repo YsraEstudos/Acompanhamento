@@ -5,7 +5,7 @@
 - Workspace root: `C:\Users\israe\OneDrive\Documentos\Projetos\Trabalho\Acompanhamento`
 - Deliverable: standalone Tampermonkey userscript built with Vite and published through a private GitHub repo + GitHub Pages
 - Runtime target: Klassmatt item pages on `https://*.klassmatt.com.br/*`
-- Current release version: `1.0.9`
+- Current release version: `1.0.10`
 - Current output file: `dist/sin-inline.user.js`
 - Public install URL: `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
 - Canonical GitHub remote: `https://github.com/YsraEstudos/km-sin-sidebar-userscript`
@@ -23,6 +23,7 @@ The current product decision is important:
 - The inline toggle never persists its state; on item/context changes the behavior returns to `alwaysOpen`.
 - Once opened, the panel shows the chosen timeline mode, either only yellow notes or the full acompanhamento.
 - Events whose visible content is only a yellow note are still preserved and rendered.
+- When a SIN history mixes multiple items, the parser now scopes the timeline to the current `IdItem` when it can confirm that item from explicit item markers in the history.
 - Se o historico realmente estiver vazio (nenhum evento), exibe um empty state.
 - During internal ASP.NET item switches, the panel must never reuse comments from the previous item.
 - The active item root is now chosen by combining the current `IdItem`/`IdSIN` hints, the visible `#txtNumero`, and summary/link consistency, so a stale `#hlkObs` from a previous item loses to the live root.
@@ -30,7 +31,7 @@ The current product decision is important:
 - Fetch of the history bypasses HTTP caching (`no-store`) to prevent stale UI state across items.
 - The script must wait for a stable SIN context before fetching `Historico.aspx`.
 - The raw popup remains available through the native site link, while the panel's `Ver inline` fallback now renders a sandboxed sanitized snapshot in read-only mode.
-- On Chrome, Tampermonkey may require `Allow User Scripts` in the extension details page. If the userscript still does not inject after enabling it, restart Chrome completely and confirm that the installed script version is `1.0.9`.
+- On Chrome, Tampermonkey may require `Allow User Scripts` in the extension details page. If the userscript still does not inject after enabling it, restart Chrome completely and confirm that the installed script version is `1.0.10`.
 
 ## 2. Why this project exists
 

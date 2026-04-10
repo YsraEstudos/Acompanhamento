@@ -4,7 +4,7 @@ Userscript para Klassmatt que mostra o KM Acompanhamento inline na pagina do ite
 
 ## Instalar e testar
 
-Versao atual: `1.0.9`.
+Versao atual: `1.0.10`.
 
 Use este link para instalar ou atualizar o script no Tampermonkey:
 
@@ -21,7 +21,7 @@ Se voce estiver no Chrome e o script nao aparecer na pagina, faca este ajuste no
 4. Feche o Chrome completamente e abra de novo
 5. Volte ao item do Klassmatt e recarregue a pagina
 
-Se a versao instalada no Tampermonkey nao for `1.0.9`, atualize o userscript pelo link acima.
+Se a versao instalada no Tampermonkey nao for `1.0.10`, atualize o userscript pelo link acima.
 
 Na primeira instalacao, o script ja entra com:
 
@@ -37,6 +37,7 @@ Se o usuario ja tinha configurado o script antes, a preferencia salva continua v
 - Esse botao inline nao persiste a preferencia global e nao altera `alwaysOpen`.
 - Ao trocar de item, recarregar o contexto ou abrir outro item, o comportamento volta a seguir `alwaysOpen`.
 - O modo `Tudo` / `Amarelos` continua separado e continua persistente.
+- Quando o historico da SIN vier misturando mais de um item, o painel tenta filtrar o acompanhamento do `IdItem` atual para evitar reaproveitar eventos do item anterior.
 
 ## Hardening de seguranca
 
