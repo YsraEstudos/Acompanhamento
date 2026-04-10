@@ -917,6 +917,80 @@ describe('SinSidebarApp', () => {
     app.destroy();
   });
 
+  it('filters mixed SIN history to the current item on ITEM_Edita pages', async () => {
+    setSettings({ alwaysOpen: true, timelineMode: 'yellow-only' });
+    document.body.innerHTML = buildItemPage({ sinId: '84405', itemId: '300892' });
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=300892&IdSIN=84405');
+
+    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(wrapHistoryHtml(`
+      <fieldset class="hist-fieldset">
+        <legend class="hist-legend">quinta-feira, 2 de abril de 2026</legend>
+        <div class="row"><a id="hlinkUsuario">USR.TESTE</a></div>
+        <div class="row result">
+          <span id="lblHora">10:30:00</span>
+          <span id="lblDescricao">Solicitacao enviada para FISCAL-INTEGRA</span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">10:25:00</span>
+          <span id="lblDescricao">Criado o Item nº <a href="javascript:{OpenNewTab('ITEM_Resumo.aspx?pesquisa_sin=84405&IdItem=300892'); }"><u>300892</u></a></span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">10:20:00</span>
+          <span id="lblDescricao">Solicitacao enviada para APROVACAO-REVISAO<br><span style="background-color: yellow">Comentario item 300892</span></span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">09:40:00</span>
+          <span id="lblDescricao">Solicitacao enviada para FINALIZACAO</span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">09:35:00</span>
+          <span id="lblDescricao">Criado o Item nº <a href="javascript:{OpenNewTab('ITEM_Resumo.aspx?pesquisa_sin=84405&IdItem=300891'); }"><u>300891</u></a></span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">09:30:00</span>
+          <span id="lblDescricao">Solicitacao enviada para APROVACAO-REVISAO<br><span style="background-color: yellow">Comentario item 300891</span></span>
+        </div>
+      </fieldset>
+    `, 'source=SIN&Id=84405&SomenteLeitura=1'))));
+
+    const app = await initApp({ hookAspNet: false });
+
+    expect(document.querySelector('.km-sin-banner')?.textContent || '').toContain('item 300892');
+    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
+    expect(document.querySelector('.km-sin-note')?.textContent).toContain('300892');
+    expect(document.querySelector('.km-sin-desc')?.textContent || '').not.toContain('300891');
+    expect(document.querySelector('.km-sin-note')?.textContent || '').not.toContain('300891');
+    app.destroy();
+  });
+
+  it('blocks parsed rendering when the SIN history mentions other items but not the current one', async () => {
+    setSettings({ alwaysOpen: true, timelineMode: 'yellow-only' });
+    document.body.innerHTML = buildItemPage({ sinId: '84405', itemId: '300892' });
+    window.history.replaceState({}, '', 'https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=300892&IdSIN=84405');
+
+    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(wrapHistoryHtml(`
+      <fieldset class="hist-fieldset">
+        <legend class="hist-legend">quinta-feira, 2 de abril de 2026</legend>
+        <div class="row"><a id="hlinkUsuario">USR.TESTE</a></div>
+        <div class="row result">
+          <span id="lblHora">09:35:00</span>
+          <span id="lblDescricao">Criado o Item nº <a href="javascript:{OpenNewTab('ITEM_Resumo.aspx?pesquisa_sin=84405&IdItem=300891'); }"><u>300891</u></a></span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">09:30:00</span>
+          <span id="lblDescricao">Solicitacao enviada para APROVACAO-REVISAO<br><span style="background-color: yellow">Comentario item 300891</span></span>
+        </div>
+      </fieldset>
+    `, 'source=SIN&Id=84405&SomenteLeitura=1'))));
+
+    const app = await initApp({ hookAspNet: false });
+
+    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(0);
+    expect(document.querySelector('[data-act="load-fallback"]')?.textContent || '').toContain('Carregar visualizacao segura');
+    expect(document.querySelector('.km-sin-banner')?.textContent || '').toContain('nao confirmou o item 300892');
+    app.destroy();
+  });
+
   it('highlights NBS mentions in red in the rendered timeline', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
     vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(wrapHistoryHtml(`

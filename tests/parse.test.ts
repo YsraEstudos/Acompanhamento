@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseHistory } from '../src/parse';
+import { parseHistory, scopeTimelineToItem } from '../src/parse';
 
 const fixturesDir = path.resolve(process.cwd(), 'tests', 'fixtures');
 
@@ -147,5 +147,60 @@ describe('history parser', () => {
     expect(result.timeline).toHaveLength(1);
     expect(result.timeline[0].descricao).toBe('');
     expect(result.timeline[0].yellowComments).toEqual(['OK']);
+  });
+
+  it('filters mixed SIN history to the current item segment when multiple created items appear', () => {
+    const doc = new DOMParser().parseFromString(`
+      <form action="./Historico.aspx?source=SIN&Id=84405&SomenteLeitura=1">
+        <fieldset class="hist-fieldset">
+          <legend class="hist-legend">quinta-feira, 2 de abril de 2026</legend>
+          <div class="row"><a id="hlinkUsuario">USR.TESTE</a></div>
+          <div class="row result">
+            <span id="lblHora">10:30:00</span>
+            <span id="lblDescricao">Solicitacao enviada para FISCAL-INTEGRA</span>
+          </div>
+          <div class="row result">
+            <span id="lblHora">10:25:00</span>
+            <span id="lblDescricao">Criado o Item nº <a href="javascript:{OpenNewTab('ITEM_Resumo.aspx?pesquisa_sin=84405&IdItem=300892'); }"><u>300892</u></a></span>
+          </div>
+          <div class="row result">
+            <span id="lblHora">10:20:00</span>
+            <span id="lblDescricao">Solicitacao enviada para APROVACAO-REVISAO<br><span style="background-color: yellow">Comentario item 300892</span></span>
+          </div>
+          <div class="row result">
+            <span id="lblHora">09:40:00</span>
+            <span id="lblDescricao">Solicitacao enviada para FINALIZACAO</span>
+          </div>
+          <div class="row result">
+            <span id="lblHora">09:35:00</span>
+            <span id="lblDescricao">Criado o Item nº <a href="javascript:{OpenNewTab('ITEM_Resumo.aspx?pesquisa_sin=84405&IdItem=300891'); }"><u>300891</u></a></span>
+          </div>
+          <div class="row result">
+            <span id="lblHora">09:30:00</span>
+            <span id="lblDescricao">Solicitacao enviada para APROVACAO-REVISAO<br><span style="background-color: yellow">Comentario item 300891</span></span>
+          </div>
+        </fieldset>
+      </form>
+    `, 'text/html');
+
+    const result = parseHistory(doc);
+    const scoped = scopeTimelineToItem(result.timeline, '300892');
+
+    expect(scoped.status).toBe('filtered');
+    expect(scoped.summary.totalEventos).toBe(3);
+    expect(scoped.summary.totalYellowEvents).toBe(1);
+    expect(scoped.timeline).toHaveLength(3);
+    expect(scoped.timeline.some((event) => event.descricao.includes('300891'))).toBe(false);
+    expect(JSON.stringify(scoped.timeline)).toContain('Comentario item 300892');
+    expect(JSON.stringify(scoped.timeline)).not.toContain('Comentario item 300891');
+  });
+
+  it('keeps single-item SIN history intact when the current item marker is present', () => {
+    const result = parseFixture('hist-real-84429.html');
+    const scoped = scopeTimelineToItem(result.timeline, '300891');
+
+    expect(scoped.status).toBe('unscoped');
+    expect(scoped.timeline).toHaveLength(result.timeline.length);
+    expect(scoped.summary).toEqual(result.summary);
   });
 });

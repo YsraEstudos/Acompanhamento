@@ -32,6 +32,14 @@ export interface ParseHistoryResult {
   parserKind: 'strict' | 'loose';
 }
 
+export interface ItemScopedTimelineResult {
+  status: 'unscoped' | 'filtered' | 'ambiguous';
+  timeline: TimelineEvent[];
+  summary: ParseHistoryResult['summary'];
+  detectedItemIds: string[];
+  diagnostic?: string;
+}
+
 interface RawEvent {
   dia: string;
   hora: string;
@@ -102,6 +110,118 @@ function dedupeStrings(values: string[]): string[] {
   }
 
   return output;
+}
+
+function buildTimelineSummary(timeline: TimelineEvent[]): ParseHistoryResult['summary'] {
+  let transitions = 0;
+  let yellowEvents = 0;
+
+  for (const event of timeline) {
+    if (event.stage) transitions++;
+    if (event.yellowComments.length > 0) yellowEvents++;
+  }
+
+  return {
+    totalEventos: timeline.length,
+    totalTransicoes: transitions,
+    totalYellowEvents: yellowEvents
+  };
+}
+
+function extractCreatedItemId(event: Pick<TimelineEvent, 'descricao'>): string | null {
+  const normalized = normalizeTextNoAccent(event.descricao);
+  const match = normalized.match(/\bcriado\s+o\s+item\s+n\W*(\d{3,})\b/i);
+  return match?.[1] || null;
+}
+
+function describeDetectedItemIds(itemIds: string[], currentItemId: string): string {
+  const others = itemIds.filter((value) => value !== currentItemId);
+  if (others.length === 0) return `item ${currentItemId}`;
+  if (others.length === 1) return `item ${currentItemId} e ignorar o item ${others[0]}`;
+  return `item ${currentItemId} e ignorar os itens ${others.join(', ')}`;
+}
+
+export function scopeTimelineToItem(
+  timeline: TimelineEvent[],
+  currentItemId: string | null | undefined
+): ItemScopedTimelineResult {
+  const normalizedItemId = normalizeSpaces(currentItemId || '').match(/\d+/)?.[0] || '';
+  const baseSummary = buildTimelineSummary(timeline);
+  if (!normalizedItemId || timeline.length === 0) {
+    return {
+      status: 'unscoped',
+      timeline,
+      summary: baseSummary,
+      detectedItemIds: []
+    };
+  }
+
+  const markers = timeline
+    .map((event, index) => {
+      const itemId = extractCreatedItemId(event);
+      return itemId ? { index, itemId } : null;
+    })
+    .filter((value): value is { index: number; itemId: string } => Boolean(value));
+
+  const detectedItemIds = dedupeStrings(markers.map((marker) => marker.itemId));
+  if (markers.length === 0) {
+    return {
+      status: 'unscoped',
+      timeline,
+      summary: baseSummary,
+      detectedItemIds
+    };
+  }
+
+  const currentMarkers = markers.filter((marker) => marker.itemId === normalizedItemId);
+  if (currentMarkers.length === 0) {
+    return {
+      status: 'ambiguous',
+      timeline,
+      summary: baseSummary,
+      detectedItemIds,
+      diagnostic: `O historico da SIN menciona outros itens, mas nao confirmou o item ${normalizedItemId} com seguranca.`
+    };
+  }
+
+  const bestSegment = timeline.filter((event, index) => {
+    let nearestDistance = Number.POSITIVE_INFINITY;
+    let nearestItemIds: string[] = [];
+
+    for (const marker of markers) {
+      const distance = Math.abs(marker.index - index);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestItemIds = [marker.itemId];
+        continue;
+      }
+
+      if (distance === nearestDistance) {
+        nearestItemIds.push(marker.itemId);
+      }
+    }
+
+    const resolvedNearestItemIds = dedupeStrings(nearestItemIds);
+    if (resolvedNearestItemIds.length !== 1) return false;
+    return resolvedNearestItemIds[0] === normalizedItemId;
+  });
+
+  if (bestSegment.length === timeline.length) {
+    return {
+      status: 'unscoped',
+      timeline,
+      summary: baseSummary,
+      detectedItemIds
+    };
+  }
+
+  return {
+    status: 'filtered',
+    timeline: bestSegment,
+    summary: buildTimelineSummary(bestSegment),
+    detectedItemIds,
+    diagnostic: `Historico da SIN filtrado para ${describeDetectedItemIds(detectedItemIds, normalizedItemId)}.`
+  };
 }
 
 function getStyleSources(element: Element): string[] {
@@ -261,8 +381,6 @@ function extractYellowNotes(descriptionEl: HTMLElement | null): YellowNoteExtrac
 
 function consolidate(events: RawEvent[]): ParseHistoryResult {
   const timeline: TimelineEvent[] = [];
-  let transitions = 0;
-  let yellowEvents = 0;
 
   for (const event of events) {
     const descricao = normalizeSpaces(event.descricao);
@@ -274,8 +392,6 @@ function consolidate(events: RawEvent[]): ParseHistoryResult {
 
     const stage = detectStage(descricao);
     const attentionMatches = detectAttentionMatches(descricao, yellowComments);
-    if (stage) transitions++;
-    if (yellowComments.length > 0) yellowEvents++;
 
     timeline.push({
       dia: normalizeSpaces(event.dia),
@@ -292,11 +408,7 @@ function consolidate(events: RawEvent[]): ParseHistoryResult {
 
   return {
     timeline,
-    summary: {
-      totalEventos: timeline.length,
-      totalTransicoes: transitions,
-      totalYellowEvents: yellowEvents
-    },
+    summary: buildTimelineSummary(timeline),
     warnings: [],
     confidence: 'low',
     documentIdentity: null,

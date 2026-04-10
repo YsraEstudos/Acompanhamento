@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.9
+// @version      1.0.10
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.9/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.10/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -318,6 +318,98 @@
     }
     return output;
   }
+  function buildTimelineSummary(timeline) {
+    let transitions = 0;
+    let yellowEvents = 0;
+    for (const event of timeline) {
+      if (event.stage) transitions++;
+      if (event.yellowComments.length > 0) yellowEvents++;
+    }
+    return {
+      totalEventos: timeline.length,
+      totalTransicoes: transitions,
+      totalYellowEvents: yellowEvents
+    };
+  }
+  function extractCreatedItemId(event) {
+    const normalized = normalizeTextNoAccent(event.descricao);
+    const match = normalized.match(/\bcriado\s+o\s+item\s+n\W*(\d{3,})\b/i);
+    return match?.[1] || null;
+  }
+  function describeDetectedItemIds(itemIds, currentItemId) {
+    const others = itemIds.filter((value) => value !== currentItemId);
+    if (others.length === 0) return `item ${currentItemId}`;
+    if (others.length === 1) return `item ${currentItemId} e ignorar o item ${others[0]}`;
+    return `item ${currentItemId} e ignorar os itens ${others.join(", ")}`;
+  }
+  function scopeTimelineToItem(timeline, currentItemId) {
+    const normalizedItemId = normalizeSpaces(currentItemId || "").match(/\d+/)?.[0] || "";
+    const baseSummary = buildTimelineSummary(timeline);
+    if (!normalizedItemId || timeline.length === 0) {
+      return {
+        status: "unscoped",
+        timeline,
+        summary: baseSummary,
+        detectedItemIds: []
+      };
+    }
+    const markers = timeline.map((event, index) => {
+      const itemId = extractCreatedItemId(event);
+      return itemId ? { index, itemId } : null;
+    }).filter((value) => Boolean(value));
+    const detectedItemIds = dedupeStrings(markers.map((marker) => marker.itemId));
+    if (markers.length === 0) {
+      return {
+        status: "unscoped",
+        timeline,
+        summary: baseSummary,
+        detectedItemIds
+      };
+    }
+    const currentMarkers = markers.filter((marker) => marker.itemId === normalizedItemId);
+    if (currentMarkers.length === 0) {
+      return {
+        status: "ambiguous",
+        timeline,
+        summary: baseSummary,
+        detectedItemIds,
+        diagnostic: `O historico da SIN menciona outros itens, mas nao confirmou o item ${normalizedItemId} com seguranca.`
+      };
+    }
+    const bestSegment = timeline.filter((event, index) => {
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      let nearestItemIds = [];
+      for (const marker of markers) {
+        const distance = Math.abs(marker.index - index);
+        if (distance < nearestDistance) {
+          nearestDistance = distance;
+          nearestItemIds = [marker.itemId];
+          continue;
+        }
+        if (distance === nearestDistance) {
+          nearestItemIds.push(marker.itemId);
+        }
+      }
+      const resolvedNearestItemIds = dedupeStrings(nearestItemIds);
+      if (resolvedNearestItemIds.length !== 1) return false;
+      return resolvedNearestItemIds[0] === normalizedItemId;
+    });
+    if (bestSegment.length === timeline.length) {
+      return {
+        status: "unscoped",
+        timeline,
+        summary: baseSummary,
+        detectedItemIds
+      };
+    }
+    return {
+      status: "filtered",
+      timeline: bestSegment,
+      summary: buildTimelineSummary(bestSegment),
+      detectedItemIds,
+      diagnostic: `Historico da SIN filtrado para ${describeDetectedItemIds(detectedItemIds, normalizedItemId)}.`
+    };
+  }
   function getStyleSources(element) {
     return [
       element.getAttribute("style") || "",
@@ -447,16 +539,12 @@
   }
   function consolidate(events) {
     const timeline = [];
-    let transitions = 0;
-    let yellowEvents = 0;
     for (const event of events) {
       const descricao = normalizeSpaces(event.descricao);
       const yellowComments = Array.isArray(event.yellowComments) ? event.yellowComments.map((item) => normalizeSpaces(item)).filter(Boolean) : [];
       if (!descricao && yellowComments.length === 0) continue;
       const stage = detectStage(descricao);
       const attentionMatches = detectAttentionMatches(descricao, yellowComments);
-      if (stage) transitions++;
-      if (yellowComments.length > 0) yellowEvents++;
       timeline.push({
         dia: normalizeSpaces(event.dia),
         hora: normalizeSpaces(event.hora),
@@ -471,11 +559,7 @@
     }
     return {
       timeline,
-      summary: {
-        totalEventos: timeline.length,
-        totalTransicoes: transitions,
-        totalYellowEvents: yellowEvents
-      },
+      summary: buildTimelineSummary(timeline),
       warnings: [],
       confidence: "low",
       documentIdentity: null,
@@ -1661,10 +1745,29 @@
               inlineBaseUrl
             };
           }
-          const result = parsed.timeline.length > 0 ? {
+          const scopedTimeline = context.itemId ? scopeTimelineToItem(parsed.timeline, context.itemId) : null;
+          if (scopedTimeline?.status === "ambiguous") {
+            return {
+              mode: "blocked",
+              timeline: [],
+              diagnostic: scopedTimeline.diagnostic,
+              actionHint: "Use o botao Ver inline para conferir o historico completo da SIN.",
+              summary: parsed.summary,
+              warnings: [...parsed.warnings, scopedTimeline.diagnostic || ""],
+              confidence: "low",
+              documentIdentity: parsed.documentIdentity,
+              inlineHtml: fetchResult.html,
+              inlineBaseUrl
+            };
+          }
+          const effectiveTimeline = scopedTimeline?.status === "filtered" ? scopedTimeline.timeline : parsed.timeline;
+          const effectiveSummary = scopedTimeline?.status === "filtered" ? scopedTimeline.summary : parsed.summary;
+          const effectiveDiagnostic = scopedTimeline?.status === "filtered" ? scopedTimeline.diagnostic : void 0;
+          const result = effectiveTimeline.length > 0 ? {
             mode: "parsed",
-            timeline: parsed.timeline,
-            summary: parsed.summary,
+            timeline: effectiveTimeline,
+            diagnostic: effectiveDiagnostic,
+            summary: effectiveSummary,
             warnings: parsed.warnings,
             confidence: parsed.confidence,
             documentIdentity: parsed.documentIdentity,
@@ -1675,7 +1778,7 @@
             timeline: [],
             diagnostic: "O popup foi carregado, mas nao continha eventos reconheciveis.",
             actionHint: "Use o botao Ver inline para verificar.",
-            summary: parsed.summary,
+            summary: effectiveSummary,
             warnings: parsed.warnings,
             confidence: parsed.confidence,
             documentIdentity: parsed.documentIdentity,

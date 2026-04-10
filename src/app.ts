@@ -5,7 +5,12 @@ import {
   type HistoryIdentity,
   validateHistoryIdentity
 } from './history-identity';
-import { parseHistoryStrict, type ParseHistoryResult, type TimelineEvent } from './parse';
+import {
+  parseHistoryStrict,
+  scopeTimelineToItem,
+  type ParseHistoryResult,
+  type TimelineEvent
+} from './parse';
 import {
   getInlinePanelToggleLabel,
   loadSettings,
@@ -650,11 +655,41 @@ export class SinSidebarApp {
           } satisfies SinHistoryResult;
         }
 
-        const result: SinHistoryResult = parsed.timeline.length > 0
+        const scopedTimeline = context.itemId
+          ? scopeTimelineToItem(parsed.timeline, context.itemId)
+          : null;
+
+        if (scopedTimeline?.status === 'ambiguous') {
+          return {
+            mode: 'blocked',
+            timeline: [],
+            diagnostic: scopedTimeline.diagnostic,
+            actionHint: 'Use o botao Ver inline para conferir o historico completo da SIN.',
+            summary: parsed.summary,
+            warnings: [...parsed.warnings, scopedTimeline.diagnostic || ''],
+            confidence: 'low',
+            documentIdentity: parsed.documentIdentity,
+            inlineHtml: fetchResult.html,
+            inlineBaseUrl
+          } satisfies SinHistoryResult;
+        }
+
+        const effectiveTimeline = scopedTimeline?.status === 'filtered'
+          ? scopedTimeline.timeline
+          : parsed.timeline;
+        const effectiveSummary = scopedTimeline?.status === 'filtered'
+          ? scopedTimeline.summary
+          : parsed.summary;
+        const effectiveDiagnostic = scopedTimeline?.status === 'filtered'
+          ? scopedTimeline.diagnostic
+          : undefined;
+
+        const result: SinHistoryResult = effectiveTimeline.length > 0
           ? {
               mode: 'parsed',
-              timeline: parsed.timeline,
-              summary: parsed.summary,
+              timeline: effectiveTimeline,
+              diagnostic: effectiveDiagnostic,
+              summary: effectiveSummary,
               warnings: parsed.warnings,
               confidence: parsed.confidence,
               documentIdentity: parsed.documentIdentity,
@@ -666,7 +701,7 @@ export class SinSidebarApp {
               timeline: [],
               diagnostic: 'O popup foi carregado, mas nao continha eventos reconheciveis.',
               actionHint: 'Use o botao Ver inline para verificar.',
-              summary: parsed.summary,
+              summary: effectiveSummary,
               warnings: parsed.warnings,
               confidence: parsed.confidence,
               documentIdentity: parsed.documentIdentity,
