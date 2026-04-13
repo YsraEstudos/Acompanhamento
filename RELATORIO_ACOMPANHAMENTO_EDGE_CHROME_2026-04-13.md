@@ -229,6 +229,32 @@ Depois de rebuildar e publicar corretamente, o esperado e:
 - `latest.json` publico com `version: 1.0.11`
 - `releases/1.0.11/sin-inline.user.js` acessivel publicamente
 
+## Verificacao de publicacao realizada em 2026-04-13 11:28 -03:00
+
+Depois do ajuste no `postbuild` e do push para `origin/main`, foi confirmado:
+
+- o arquivo `sin-inline.user.js` na raiz local ficou em `1.0.11`
+- o arquivo `latest.json` na raiz local ficou em `1.0.11`
+- o branch remoto `origin/main` tambem passou a conter `1.0.11`
+
+Mesmo assim, na checagem logo apos o push, os links publicos ainda retornavam `1.0.10`:
+
+- `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
+- `https://ysraestudos.github.io/km-sin-sidebar-userscript/latest.json`
+
+Conclusao mais provavel nesse ponto:
+
+- a correcao ja esta publicada no branch remoto correto
+- o GitHub Pages ainda nao refletiu a nova versao no endpoint publico no momento da consulta
+- como os headers retornaram `Cache-Control: max-age=600`, existe janela de cache e propagacao do CDN
+
+Fechamento tecnico:
+
+- problema original de build/publicacao na raiz: corrigido
+- estado atual do repositorio remoto: correto em `1.0.11`
+- estado observado do link publico durante a verificacao: ainda `1.0.10`
+- proxima expectativa: o endpoint publico deve convergir para `1.0.11` apos a publicacao/cache do GitHub Pages terminar
+
 ## Proxima verificacao recomendada
 
 Confirmar apos a publicacao:
