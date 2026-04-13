@@ -26,6 +26,21 @@ describe('history URL helpers', () => {
     );
   });
 
+  it('reuses the page k token when the acompanhamento href omits it', () => {
+    window.history.replaceState(
+      {},
+      '',
+      'https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=300993&IdSIN=84560&k=7542qpghf2rpeelngeriugmnvyn3_2573'
+    );
+
+    const href = "javascript:{OpenWindowsWHR('Historico.aspx?source=SIN&Id=84560&SomenteLeitura=1', 680, 500, 1)}";
+
+    expect(extractHistoryUrlFromHref(href)).toBe(
+      'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=84560&SomenteLeitura=1&k=7542qpghf2rpeelngeriugmnvyn3_2573'
+    );
+    expect(extractHistoryIdentityFromHref(href)?.k).toBe('7542qpghf2rpeelngeriugmnvyn3_2573');
+  });
+
   it('resolves a stable page context from the item page summary block', () => {
     document.body.innerHTML = fs.readFileSync(path.join(fixturesDir, 'item.html'), 'utf8');
     const context = resolvePageContext();

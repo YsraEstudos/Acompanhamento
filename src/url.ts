@@ -73,6 +73,25 @@ function getSearchParamInsensitive(url: URL, name: string): string | null {
   return null;
 }
 
+function withNativeSecurityToken(url: string | null): string | null {
+  const absoluteUrl = absolutizeUrl(url);
+  if (!absoluteUrl) return null;
+
+  try {
+    const resolved = new URL(absoluteUrl);
+    if (resolved.searchParams.has('k')) return resolved.toString();
+
+    const currentUrl = new URL(window.location.href);
+    const currentToken = getSearchParamInsensitive(currentUrl, 'k');
+    if (!currentToken) return resolved.toString();
+
+    resolved.searchParams.set('k', currentToken);
+    return resolved.toString();
+  } catch {
+    return absoluteUrl;
+  }
+}
+
 function getCurrentLocationHints(): { itemId: string | null; sinId: string | null } {
   try {
     const url = new URL(window.location.href);
@@ -115,7 +134,9 @@ export function extractUrlFromJsFunction(href: string | null | undefined, functi
 }
 
 export function extractHistoryUrlFromHref(href: string | null | undefined): string | null {
-  return extractUrlFromJsFunction(href, ['OpenWindowsWHR', 'OpenWindowsWHRNS', 'OpenNewTab']);
+  return withNativeSecurityToken(
+    extractUrlFromJsFunction(href, ['OpenWindowsWHR', 'OpenWindowsWHRNS', 'OpenNewTab'])
+  );
 }
 
 export function extractHistoryIdentityFromHref(href: string | null | undefined): HistoryIdentity | null {
