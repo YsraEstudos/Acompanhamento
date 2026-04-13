@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.10
+// @version      1.0.11
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.10/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.11/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
