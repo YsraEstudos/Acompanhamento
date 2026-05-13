@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.12
+// @version      1.0.13
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.12/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.13/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -1915,7 +1915,7 @@
     syncModeButton(shell) {
       const mode = this.settings.timelineMode;
       shell.modeButton.dataset.mode = mode;
-      shell.modeButton.textContent = mode === "all" ? "Tudo" : "Amarelos";
+      shell.modeButton.textContent = mode === "all" ? "Amarelos" : "Tudo";
       shell.modeButton.title = mode === "all" ? "Clique para mostrar somente os comentarios amarelos" : "Clique para mostrar todo o acompanhamento";
     }
     setAsideVisible(shell, visible) {

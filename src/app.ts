@@ -865,7 +865,7 @@ export class SinSidebarApp {
   private syncModeButton(shell: ShellRefs): void {
     const mode = this.settings.timelineMode;
     shell.modeButton.dataset.mode = mode;
-    shell.modeButton.textContent = mode === 'all' ? 'Tudo' : 'Amarelos';
+    shell.modeButton.textContent = mode === 'all' ? 'Amarelos' : 'Tudo';
     shell.modeButton.title = mode === 'all'
       ? 'Clique para mostrar somente os comentarios amarelos'
       : 'Clique para mostrar todo o acompanhamento';
