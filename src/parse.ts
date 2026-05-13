@@ -371,7 +371,7 @@ function extractYellowNotes(descriptionEl: HTMLElement | null): YellowNoteExtrac
   removeAcceptedNotes(clone, acceptedNotes);
 
   return {
-    descricao: normalizeSpaces(clone.textContent || descriptionEl.textContent || ''),
+    descricao: normalizeSpaces(clone.textContent ?? ''),
     descricaoHtml: clone.innerHTML.trim(),
     yellowComments: dedupeStrings(yellowComments),
     warnings: dedupeStrings(warnings),
