@@ -51,6 +51,10 @@ describe('history parser', () => {
           <span id="lblHora">10:10:00</span>
           <span id="lblDescricao">Nao destacar NCM 00000000 nem NBS 199990000</span>
         </div>
+        <div class="row result">
+          <span id="lblHora">10:15:00</span>
+          <span id="lblDescricao">OK (CA#20260706.1112.061134046)</span>
+        </div>
       </fieldset>
     `, 'text/html');
 
@@ -62,6 +66,8 @@ describe('history parser', () => {
     expect(result.timeline[1].attentionMatches).toEqual(['NBS', '1.0101.00.00']);
     expect(result.timeline[2].hasAttentionHighlight).toBe(false);
     expect(result.timeline[2].attentionMatches).toEqual([]);
+    expect(result.timeline[3].hasAttentionHighlight).toBe(false);
+    expect(result.timeline[3].attentionMatches).toEqual([]);
   });
 
   it('does not mark short numbers as attention highlights', () => {
@@ -210,4 +216,5 @@ describe('history parser', () => {
     expect(scoped.summary).toEqual(result.summary);
   });
 });
+
 

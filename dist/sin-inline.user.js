@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.13
+// @version      1.0.14
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.13/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.14/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -310,6 +310,10 @@
     if (digits[0] !== "1") return false;
     return VALID_NBS_CHAPTERS.has(digits.slice(1, 3));
   }
+  function hasCaseReferencePrefix(value, index) {
+    const before = value.slice(Math.max(0, index - 4), index);
+    return /ca\s*#$/i.test(before);
+  }
   function detectStage(description) {
     const match = description.match(/Solicita[cç][aã]o enviada para\s+(.+)$/i) || description.match(/Solicita.*o enviada para\s+(.+)$/i);
     return match?.[1] ? normalizeSpaces(match[1]).toUpperCase() : null;
@@ -325,6 +329,10 @@
     for (const match of rawCombined.matchAll(/(ncm|nbs)?\s*[:=.-]?\s*(\d[\d.\s/-]{6,}\d)/gi)) {
       const rawCode = normalizeSpaces(match[2]);
       const label = normalizeSpaces(match[1] || "").toUpperCase();
+      const codeIndex = match.index === void 0 ? -1 : match.index + match[0].indexOf(match[2]);
+      if (!label && codeIndex >= 0 && hasCaseReferencePrefix(rawCombined, codeIndex)) {
+        continue;
+      }
       if (label === "NBS") {
         if (isValidNbsCandidate(rawCode)) {
           matches.add("NBS");

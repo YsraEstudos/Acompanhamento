@@ -101,6 +101,11 @@ function isValidNbsCandidate(value: string): boolean {
   return VALID_NBS_CHAPTERS.has(digits.slice(1, 3));
 }
 
+function hasCaseReferencePrefix(value: string, index: number): boolean {
+  const before = value.slice(Math.max(0, index - 4), index);
+  return /ca\s*#$/i.test(before);
+}
+
 function detectStage(description: string): string | null {
   const match = description.match(/Solicita[cç][aã]o enviada para\s+(.+)$/i)
     || description.match(/Solicita.*o enviada para\s+(.+)$/i);
@@ -120,6 +125,11 @@ function detectAttentionMatches(description: string, yellowComments: string[]): 
   for (const match of rawCombined.matchAll(/(ncm|nbs)?\s*[:=.-]?\s*(\d[\d.\s/-]{6,}\d)/gi)) {
     const rawCode = normalizeSpaces(match[2]);
     const label = normalizeSpaces(match[1] || '').toUpperCase();
+    const codeIndex = match.index === undefined ? -1 : match.index + match[0].indexOf(match[2]);
+
+    if (!label && codeIndex >= 0 && hasCaseReferencePrefix(rawCombined, codeIndex)) {
+      continue;
+    }
 
     if (label === 'NBS') {
       if (isValidNbsCandidate(rawCode)) {
@@ -621,5 +631,8 @@ export function parseHistory(doc: Document, baseUrl: string = window.location.hr
 
   return finalizeParse(doc, parseHistoryLooseBuild(doc), baseUrl);
 }
+
+
+
 
 
