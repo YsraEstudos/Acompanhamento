@@ -75,6 +75,32 @@ const YELLOW_STYLE_PATTERNS = [
   /#999900\b/i
 ];
 
+const VALID_NCM_CHAPTERS = new Set(
+  Array.from({ length: 97 }, (_, index) => String(index + 1).padStart(2, '0'))
+    .filter((chapter) => chapter !== '77')
+);
+
+const VALID_NBS_CHAPTERS = new Set(
+  Array.from({ length: 27 }, (_, index) => String(index + 1).padStart(2, '0'))
+);
+
+function normalizeCodeDigits(value: string): string {
+  return value.replace(/\D+/g, '');
+}
+
+function isValidNcmCandidate(value: string): boolean {
+  const digits = normalizeCodeDigits(value);
+  if (digits.length < 8) return false;
+  return VALID_NCM_CHAPTERS.has(digits.slice(0, 2));
+}
+
+function isValidNbsCandidate(value: string): boolean {
+  const digits = normalizeCodeDigits(value);
+  if (digits.length < 9) return false;
+  if (digits[0] !== '1') return false;
+  return VALID_NBS_CHAPTERS.has(digits.slice(1, 3));
+}
+
 function detectStage(description: string): string | null {
   const match = description.match(/Solicita[cç][aã]o enviada para\s+(.+)$/i)
     || description.match(/Solicita.*o enviada para\s+(.+)$/i);
@@ -87,12 +113,28 @@ function detectAttentionMatches(description: string, yellowComments: string[]): 
   const rawCombined = normalizeSpaces(combined);
   const matches = new Set<string>();
 
-  for (const match of normalizedCombined.matchAll(/\b(?:ncm|nbs|lei)\b/g)) {
+  for (const match of normalizedCombined.matchAll(/\blei\b/g)) {
     matches.add(match[0].toUpperCase());
   }
 
-  for (const match of rawCombined.matchAll(/(?<!\d)(?:\d{4}(?:\.\d{2}){2}(?:\.\d{2})?|\d{8,10})(?!\d)/g)) {
-    matches.add(match[0]);
+  for (const match of rawCombined.matchAll(/(ncm|nbs)?\s*[:=.-]?\s*(\d[\d.\s/-]{6,}\d)/gi)) {
+    const rawCode = normalizeSpaces(match[2]);
+    const label = normalizeSpaces(match[1] || '').toUpperCase();
+
+    if (label === 'NBS') {
+      if (isValidNbsCandidate(rawCode)) {
+        matches.add('NBS');
+        matches.add(rawCode);
+      }
+      continue;
+    }
+
+    if (label === 'NCM' || !label) {
+      if (isValidNcmCandidate(rawCode)) {
+        matches.add('NCM');
+        matches.add(rawCode);
+      }
+    }
   }
 
   return Array.from(matches);
@@ -579,3 +621,5 @@ export function parseHistory(doc: Document, baseUrl: string = window.location.hr
 
   return finalizeParse(doc, parseHistoryLooseBuild(doc), baseUrl);
 }
+
+

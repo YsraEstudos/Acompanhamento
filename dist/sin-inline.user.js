@@ -290,6 +290,26 @@
     /#e6d665\b/i,
     /#999900\b/i
   ];
+  const VALID_NCM_CHAPTERS = new Set(
+    Array.from({ length: 97 }, (_, index) => String(index + 1).padStart(2, "0")).filter((chapter) => chapter !== "77")
+  );
+  const VALID_NBS_CHAPTERS = new Set(
+    Array.from({ length: 27 }, (_, index) => String(index + 1).padStart(2, "0"))
+  );
+  function normalizeCodeDigits(value) {
+    return value.replace(/\D+/g, "");
+  }
+  function isValidNcmCandidate(value) {
+    const digits = normalizeCodeDigits(value);
+    if (digits.length < 8) return false;
+    return VALID_NCM_CHAPTERS.has(digits.slice(0, 2));
+  }
+  function isValidNbsCandidate(value) {
+    const digits = normalizeCodeDigits(value);
+    if (digits.length < 9) return false;
+    if (digits[0] !== "1") return false;
+    return VALID_NBS_CHAPTERS.has(digits.slice(1, 3));
+  }
   function detectStage(description) {
     const match = description.match(/Solicita[cç][aã]o enviada para\s+(.+)$/i) || description.match(/Solicita.*o enviada para\s+(.+)$/i);
     return match?.[1] ? normalizeSpaces(match[1]).toUpperCase() : null;
@@ -299,11 +319,25 @@
     const normalizedCombined = normalizeTextNoAccent(combined);
     const rawCombined = normalizeSpaces(combined);
     const matches = new Set();
-    for (const match of normalizedCombined.matchAll(/\b(?:ncm|nbs|lei)\b/g)) {
+    for (const match of normalizedCombined.matchAll(/\blei\b/g)) {
       matches.add(match[0].toUpperCase());
     }
-    for (const match of rawCombined.matchAll(new RegExp("(?<!\\d)(?:\\d{4}(?:\\.\\d{2}){2}(?:\\.\\d{2})?|\\d{8,10})(?!\\d)", "g"))) {
-      matches.add(match[0]);
+    for (const match of rawCombined.matchAll(/(ncm|nbs)?\s*[:=.-]?\s*(\d[\d.\s/-]{6,}\d)/gi)) {
+      const rawCode = normalizeSpaces(match[2]);
+      const label = normalizeSpaces(match[1] || "").toUpperCase();
+      if (label === "NBS") {
+        if (isValidNbsCandidate(rawCode)) {
+          matches.add("NBS");
+          matches.add(rawCode);
+        }
+        continue;
+      }
+      if (label === "NCM" || !label) {
+        if (isValidNcmCandidate(rawCode)) {
+          matches.add("NCM");
+          matches.add(rawCode);
+        }
+      }
     }
     return Array.from(matches);
   }
@@ -671,6 +705,7 @@
     }));
   }
   const INLINE_PASSTHROUGH_TAGS = new Set(["B", "STRONG", "I", "EM", "U", "BR", "SPAN"]);
+  const PLAIN_URL_PATTERN = /https?:\/\/[^\s<>()"']+/gi;
   const SNAPSHOT_PASSTHROUGH_TAGS = new Set([
     "ARTICLE",
     "B",
@@ -711,20 +746,49 @@
     div.textContent = value ?? "";
     return div.innerHTML;
   }
-  function resolveTrustedSameOriginUrl(href, baseUrl) {
+  function resolveSafeLinkUrl(href, baseUrl) {
     try {
       const base = new URL(baseUrl, window.location.href);
       const url = new URL(href, base);
-      if (url.origin !== base.origin) return null;
-      if (url.protocol.toLowerCase() !== "https:") return null;
+      const protocol = url.protocol.toLowerCase();
+      if (protocol !== "https:" && protocol !== "http:") return null;
       return url;
     } catch {
       return null;
     }
   }
+  function buildAnchor(url, text) {
+    const anchor = document.createElement("a");
+    anchor.href = url.toString();
+    anchor.target = "_blank";
+    anchor.rel = "noreferrer noopener";
+    anchor.textContent = text;
+    return anchor;
+  }
+  function sanitizeTextNode(text, baseUrl) {
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    for (const match of text.matchAll(PLAIN_URL_PATTERN)) {
+      const index = match.index ?? 0;
+      const rawUrl = match[0];
+      if (index > cursor) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor, index)));
+      }
+      const trailingPunctuation = rawUrl.match(/[.,;:!?]+$/)?.[0] || "";
+      const urlText = trailingPunctuation ? rawUrl.slice(0, -trailingPunctuation.length) : rawUrl;
+      const url = resolveSafeLinkUrl(urlText, baseUrl);
+      fragment.appendChild(url ? buildAnchor(url, urlText) : document.createTextNode(urlText));
+      if (trailingPunctuation) fragment.appendChild(document.createTextNode(trailingPunctuation));
+      cursor = index + rawUrl.length;
+    }
+    if (cursor < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor)));
+    }
+    return fragment.childNodes.length === 1 ? fragment.firstChild : fragment;
+  }
   function sanitizeNode(node, baseUrl, options) {
     if (node.nodeType === Node.TEXT_NODE) {
-      return document.createTextNode(node.textContent ?? "");
+      return sanitizeTextNode(node.textContent ?? "", baseUrl);
     }
     if (!(node instanceof Element)) {
       return null;
@@ -737,16 +801,11 @@
       if (!href || /^javascript:/i.test(href)) {
         return document.createTextNode(text);
       }
-      const url = resolveTrustedSameOriginUrl(href, baseUrl);
+      const url = resolveSafeLinkUrl(href, baseUrl);
       if (!url) {
         return document.createTextNode(text);
       }
-      const anchor = document.createElement("a");
-      anchor.href = url.toString();
-      anchor.target = "_blank";
-      anchor.rel = "noreferrer noopener";
-      anchor.textContent = text;
-      return anchor;
+      return buildAnchor(url, text);
     }
     const fragment = document.createDocumentFragment();
     for (const child of node.childNodes) {
@@ -766,7 +825,9 @@
   function sanitizeInlineHtml(value, baseUrl = window.location.href) {
     const input = String(value ?? "");
     if (!input.includes("<")) {
-      return escapeHtml(input);
+      const container2 = document.createElement("div");
+      container2.appendChild(sanitizeTextNode(input, baseUrl));
+      return container2.innerHTML;
     }
     const template = document.createElement("template");
     template.innerHTML = input;
@@ -966,7 +1027,7 @@
   `;
     const desc = document.createElement("div");
     desc.className = "km-sin-desc";
-    const html = event.descricaoHtml ? sanitizeInlineHtml(event.descricaoHtml, historyUrl) : escapeHtml(event.descricao);
+    const html = event.descricaoHtml ? sanitizeInlineHtml(event.descricaoHtml, historyUrl) : sanitizeInlineHtml(event.descricao, historyUrl);
     desc.innerHTML = html || escapeHtml(event.descricao);
     item.append(meta, desc);
     if (event.yellowComments.length > 0) {
@@ -975,7 +1036,7 @@
       for (const comment of event.yellowComments) {
         const note = document.createElement("div");
         note.className = "km-sin-note";
-        note.textContent = comment;
+        note.innerHTML = sanitizeInlineHtml(comment, historyUrl);
         notes.appendChild(note);
       }
       item.appendChild(notes);

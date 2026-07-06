@@ -1,6 +1,7 @@
 import { normalizeSpaces } from './text';
 
 const INLINE_PASSTHROUGH_TAGS = new Set(['B', 'STRONG', 'I', 'EM', 'U', 'BR', 'SPAN']);
+const PLAIN_URL_PATTERN = /https?:\/\/[^\s<>()"']+/gi;
 const SNAPSHOT_PASSTHROUGH_TAGS = new Set([
   'ARTICLE',
   'B',
@@ -47,21 +48,56 @@ export function escapeHtml(value: string | null | undefined): string {
   return div.innerHTML;
 }
 
-function resolveTrustedSameOriginUrl(href: string, baseUrl: string): URL | null {
+function resolveSafeLinkUrl(href: string, baseUrl: string): URL | null {
   try {
     const base = new URL(baseUrl, window.location.href);
     const url = new URL(href, base);
-    if (url.origin !== base.origin) return null;
-    if (url.protocol.toLowerCase() !== 'https:') return null;
+    const protocol = url.protocol.toLowerCase();
+    if (protocol !== 'https:' && protocol !== 'http:') return null;
     return url;
   } catch {
     return null;
   }
 }
 
+function buildAnchor(url: URL, text: string): HTMLAnchorElement {
+  const anchor = document.createElement('a');
+  anchor.href = url.toString();
+  anchor.target = '_blank';
+  anchor.rel = 'noreferrer noopener';
+  anchor.textContent = text;
+  return anchor;
+}
+
+function sanitizeTextNode(text: string, baseUrl: string): Node {
+  const fragment = document.createDocumentFragment();
+  let cursor = 0;
+
+  for (const match of text.matchAll(PLAIN_URL_PATTERN)) {
+    const index = match.index ?? 0;
+    const rawUrl = match[0];
+    if (index > cursor) {
+      fragment.appendChild(document.createTextNode(text.slice(cursor, index)));
+    }
+
+    const trailingPunctuation = rawUrl.match(/[.,;:!?]+$/)?.[0] || '';
+    const urlText = trailingPunctuation ? rawUrl.slice(0, -trailingPunctuation.length) : rawUrl;
+    const url = resolveSafeLinkUrl(urlText, baseUrl);
+    fragment.appendChild(url ? buildAnchor(url, urlText) : document.createTextNode(urlText));
+    if (trailingPunctuation) fragment.appendChild(document.createTextNode(trailingPunctuation));
+    cursor = index + rawUrl.length;
+  }
+
+  if (cursor < text.length) {
+    fragment.appendChild(document.createTextNode(text.slice(cursor)));
+  }
+
+  return fragment.childNodes.length === 1 ? fragment.firstChild as Node : fragment;
+}
+
 function sanitizeNode(node: Node, baseUrl: string, options: SanitizeOptions): Node | null {
   if (node.nodeType === Node.TEXT_NODE) {
-    return document.createTextNode(node.textContent ?? '');
+    return sanitizeTextNode(node.textContent ?? '', baseUrl);
   }
 
   if (!(node instanceof Element)) {
@@ -78,17 +114,12 @@ function sanitizeNode(node: Node, baseUrl: string, options: SanitizeOptions): No
       return document.createTextNode(text);
     }
 
-    const url = resolveTrustedSameOriginUrl(href, baseUrl);
+    const url = resolveSafeLinkUrl(href, baseUrl);
     if (!url) {
       return document.createTextNode(text);
     }
 
-    const anchor = document.createElement('a');
-    anchor.href = url.toString();
-    anchor.target = '_blank';
-    anchor.rel = 'noreferrer noopener';
-    anchor.textContent = text;
-    return anchor;
+    return buildAnchor(url, text);
   }
 
   const fragment = document.createDocumentFragment();
@@ -113,7 +144,9 @@ function sanitizeNode(node: Node, baseUrl: string, options: SanitizeOptions): No
 export function sanitizeInlineHtml(value: string | null | undefined, baseUrl: string = window.location.href): string {
   const input = String(value ?? '');
   if (!input.includes('<')) {
-    return escapeHtml(input);
+    const container = document.createElement('div');
+    container.appendChild(sanitizeTextNode(input, baseUrl));
+    return container.innerHTML;
   }
 
   const template = document.createElement('template');
@@ -147,3 +180,5 @@ export function sanitizeSnapshotHtml(value: string | null | undefined, baseUrl: 
 
   return container.innerHTML;
 }
+
+

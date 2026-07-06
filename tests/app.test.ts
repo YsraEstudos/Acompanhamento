@@ -203,7 +203,7 @@ describe('SinSidebarApp', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
     expect(document.querySelector('.km-sin-title')?.textContent).toBe('KM Acompanhamento');
-    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
+    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Tudo');
     expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
     expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
@@ -220,7 +220,7 @@ describe('SinSidebarApp', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(document.querySelector('.km-sin-layout')).not.toBeNull();
     expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
-    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Tudo');
+    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
     app.destroy();
   });
 
@@ -590,7 +590,7 @@ describe('SinSidebarApp', () => {
     const secondApp = await initApp({ hookAspNet: false });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
-    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Amarelos');
+    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Tudo');
     secondApp.destroy();
   });
 
@@ -601,7 +601,7 @@ describe('SinSidebarApp', () => {
     const app = await initApp({ hookAspNet: false });
 
     const modeButton = document.querySelector<HTMLButtonElement>('[data-role="mode"]');
-    expect(modeButton?.textContent).toBe('Tudo');
+    expect(modeButton?.textContent).toBe('Amarelos');
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(2);
 
     const allSettings = JSON.stringify({ alwaysOpen: true, timelineMode: 'all' });
@@ -611,14 +611,14 @@ describe('SinSidebarApp', () => {
     dispatchSettingsStorageEvent(allSettings, yellowSettings);
     await flush();
 
-    expect(modeButton?.textContent).toBe('Amarelos');
+    expect(modeButton?.textContent).toBe('Tudo');
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
 
     localStorage.setItem(SETTINGS_KEY, allSettings);
     dispatchSettingsStorageEvent(yellowSettings, allSettings);
     await flush();
 
-    expect(modeButton?.textContent).toBe('Tudo');
+    expect(modeButton?.textContent).toBe('Amarelos');
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(2);
     app.destroy();
   });
@@ -743,7 +743,7 @@ describe('SinSidebarApp', () => {
     app.destroy();
   });
 
-  it('keeps unsafe history links as inert text in the rendered app timeline', async () => {
+  it('keeps safe history links clickable in the rendered app timeline and blocks javascript links', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
     vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(wrapHistoryHtml(`
       <fieldset class="hist-fieldset">
@@ -753,9 +753,10 @@ describe('SinSidebarApp', () => {
           <span id="lblHora">10:00:00</span>
           <span id="lblDescricao">
             Veja
-            <a href="https://attacker.example/phish">externo</a>
+            <a href="https://example.com/produto">externo</a>
             e
             <a href="/ITEM_Edita.aspx?IdItem=77">interno</a>
+            <a href="javascript:alert(1)">bloqueado</a>
           </span>
         </div>
       </fieldset>
@@ -764,10 +765,12 @@ describe('SinSidebarApp', () => {
     const app = await initApp({ hookAspNet: false });
 
     const anchors = Array.from(document.querySelectorAll<HTMLAnchorElement>('.km-sin-desc a'));
-    expect(anchors).toHaveLength(1);
-    expect(anchors[0].href).toBe('https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=77');
-    expect(document.querySelector('.km-sin-desc')?.textContent).toContain('externo');
-    expect(document.querySelector('.km-sin-desc')?.innerHTML).not.toContain('attacker.example');
+    expect(anchors).toHaveLength(2);
+    expect(anchors[0].href).toBe('https://example.com/produto');
+    expect(anchors[0].target).toBe('_blank');
+    expect(anchors[1].href).toBe('https://demo.klassmatt.com.br/ITEM_Edita.aspx?IdItem=77');
+    expect(document.querySelector('.km-sin-desc')?.textContent).toContain('bloqueado');
+    expect(document.querySelector('.km-sin-desc')?.innerHTML).not.toContain('javascript:');
     app.destroy();
   });
 
@@ -991,7 +994,7 @@ describe('SinSidebarApp', () => {
     app.destroy();
   });
 
-  it('highlights NBS mentions in red in the rendered timeline', async () => {
+  it('highlights valid NBS codes in red in the rendered timeline', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
     vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(wrapHistoryHtml(`
       <fieldset class="hist-fieldset">
@@ -999,7 +1002,7 @@ describe('SinSidebarApp', () => {
         <div class="row"><a id="hlinkUsuario">ANA.TESTE*</a></div>
         <div class="row result">
           <span id="lblHora">10:00:00</span>
-          <span id="lblDescricao">Validar NBS 12345678 antes da aprovacao</span>
+          <span id="lblDescricao">Validar NBS 1.0101.00.00 antes da aprovacao</span>
         </div>
       </fieldset>
     `))));
@@ -1008,7 +1011,10 @@ describe('SinSidebarApp', () => {
 
     expect(document.querySelectorAll('.km-sin-item.is-attention')).toHaveLength(1);
     expect(document.querySelector('.km-sin-attention-chip')?.textContent).toBe('Destaque');
-    expect(document.querySelector('.km-sin-desc')?.textContent).toContain('NBS 12345678');
+    expect(document.querySelector('.km-sin-desc')?.textContent).toContain('NBS 1.0101.00.00');
     app.destroy();
   });
 });
+
+
+

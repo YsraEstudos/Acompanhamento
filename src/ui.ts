@@ -231,7 +231,7 @@ function buildEventNode(event: TimelineEvent, historyUrl: string): HTMLElement {
   desc.className = 'km-sin-desc';
   const html = event.descricaoHtml
     ? sanitizeInlineHtml(event.descricaoHtml, historyUrl)
-    : escapeHtml(event.descricao);
+    : sanitizeInlineHtml(event.descricao, historyUrl);
   desc.innerHTML = html || escapeHtml(event.descricao);
 
   item.append(meta, desc);
@@ -242,7 +242,7 @@ function buildEventNode(event: TimelineEvent, historyUrl: string): HTMLElement {
     for (const comment of event.yellowComments) {
       const note = document.createElement('div');
       note.className = 'km-sin-note';
-      note.textContent = comment;
+      note.innerHTML = sanitizeInlineHtml(comment, historyUrl);
       notes.appendChild(note);
     }
     item.appendChild(notes);
@@ -368,3 +368,4 @@ export function renderIframeFallback(
   fragment.appendChild(iframe);
   shell.bodyEl.replaceChildren(fragment);
 }
+

@@ -34,18 +34,22 @@ describe('history parser', () => {
     expect(result.timeline[2].stage).toBe('APROVACAO-KLASSMATT');
   });
 
-  it('marks attention highlights for NCM, NBS, lei and matching codes', () => {
+  it('marks attention highlights only for lei and NCM/NBS candidates with valid starting chapters', () => {
     const doc = new DOMParser().parseFromString(`
       <fieldset class="hist-fieldset">
         <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
         <div class="row"><a id="hlinkUsuario">ANA.TESTE*</a></div>
         <div class="row result">
           <span id="lblHora">10:00:00</span>
-          <span id="lblDescricao">Validar lei e NCM 1234.56.78</span>
+          <span id="lblDescricao">Validar lei e NCMabc8408.20.90xyz</span>
         </div>
         <div class="row result">
           <span id="lblHora">10:05:00</span>
-          <span id="lblDescricao">Analisar NBS<br><span style="background-color: yellow">codigo 12345678</span></span>
+          <span id="lblDescricao">Analisar NBS<br><span style="background-color: yellow">codigo NBS1.0101.00.00</span></span>
+        </div>
+        <div class="row result">
+          <span id="lblHora">10:10:00</span>
+          <span id="lblDescricao">Nao destacar NCM 00000000 nem NBS 199990000</span>
         </div>
       </fieldset>
     `, 'text/html');
@@ -53,9 +57,11 @@ describe('history parser', () => {
     const result = parseHistory(doc);
 
     expect(result.timeline[0].hasAttentionHighlight).toBe(true);
-    expect(result.timeline[0].attentionMatches).toEqual(['LEI', 'NCM', '1234.56.78']);
+    expect(result.timeline[0].attentionMatches).toEqual(['LEI', 'NCM', '8408.20.90']);
     expect(result.timeline[1].hasAttentionHighlight).toBe(true);
-    expect(result.timeline[1].attentionMatches).toEqual(['NBS', '12345678']);
+    expect(result.timeline[1].attentionMatches).toEqual(['NBS', '1.0101.00.00']);
+    expect(result.timeline[2].hasAttentionHighlight).toBe(false);
+    expect(result.timeline[2].attentionMatches).toEqual([]);
   });
 
   it('does not mark short numbers as attention highlights', () => {
@@ -204,3 +210,4 @@ describe('history parser', () => {
     expect(scoped.summary).toEqual(result.summary);
   });
 });
+
