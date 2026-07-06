@@ -1,4 +1,4 @@
-# AI Context: KM Acompanhamento
+# Ysrael Xavier Context: KM Acompanhamento
 
 ## 1. Project identity
 
@@ -508,9 +508,9 @@ What is covered:
 - Silent HTTP redirects (to `Login.aspx`, `Erro.aspx`, etc.) are also detected via `response.redirected` and `response.url`, and cross-origin redirects are blocked before parsing.
 - Transient errors (network, 5xx, timeout) do not auto-retry; the user can reopen the panel or recarregar a pagina when quiser.
 
-## 13. Guidance for future AI edits
+## 13. Guidance for future maintenance
 
-If you are another AI entering this project, use this order of inspection:
+For future maintenance by Ysrael Xavier, use this order of inspection:
 
 1. Read `src/app.ts`
 2. Read `src/url.ts`
@@ -544,3 +544,4 @@ This project is a small, tested Vite/Tampermonkey userscript that attaches only 
 - The new resolver scoring intentionally prefers the visible live `.kl-view` whose item field and summary data match the current page hints, so hidden or stale copies from the previous item no longer win.
 - The runtime now rehydrates or clears stale state when the DOM changes in place via `MutationObserver`, `popstate`, or `hashchange`, which covers Klassmatt item swaps that do not emit a clean `endRequest`.
 - The repo was pushed successfully to the moved remote, and the repository URL now resolves through the uppercase `YsraEstudos` location.
+
