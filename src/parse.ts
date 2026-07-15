@@ -3,6 +3,7 @@ import {
   type HistoryIdentity
 } from './history-identity';
 import { normalizeSpaces, normalizeTextNoAccent } from './text';
+import { VALID_NCM_PREFIXES, VALID_NBS_PREFIXES } from './code-prefixes';
 
 export type ParseConfidence = 'high' | 'low';
 
@@ -75,14 +76,8 @@ const YELLOW_STYLE_PATTERNS = [
   /#999900\b/i
 ];
 
-const VALID_NCM_CHAPTERS = new Set(
-  Array.from({ length: 97 }, (_, index) => String(index + 1).padStart(2, '0'))
-    .filter((chapter) => chapter !== '77')
-);
-
-const VALID_NBS_CHAPTERS = new Set(
-  Array.from({ length: 27 }, (_, index) => String(index + 1).padStart(2, '0'))
-);
+const VALID_NCM_PREFIX_SET = new Set(VALID_NCM_PREFIXES);
+const VALID_NBS_PREFIX_SET = new Set(VALID_NBS_PREFIXES);
 
 function normalizeCodeDigits(value: string): string {
   return value.replace(/\D+/g, '');
@@ -91,14 +86,14 @@ function normalizeCodeDigits(value: string): string {
 function isValidNcmCandidate(value: string): boolean {
   const digits = normalizeCodeDigits(value);
   if (digits.length < 8) return false;
-  return VALID_NCM_CHAPTERS.has(digits.slice(0, 2));
+  return VALID_NCM_PREFIX_SET.has(digits.slice(0, 4));
 }
 
 function isValidNbsCandidate(value: string): boolean {
   const digits = normalizeCodeDigits(value);
   if (digits.length < 9) return false;
   if (digits[0] !== '1') return false;
-  return VALID_NBS_CHAPTERS.has(digits.slice(1, 3));
+  return VALID_NBS_PREFIX_SET.has(digits.slice(0, 5));
 }
 
 function hasCaseReferencePrefix(value: string, index: number): boolean {
@@ -631,8 +626,3 @@ export function parseHistory(doc: Document, baseUrl: string = window.location.hr
 
   return finalizeParse(doc, parseHistoryLooseBuild(doc), baseUrl);
 }
-
-
-
-
-

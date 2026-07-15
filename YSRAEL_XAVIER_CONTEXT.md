@@ -499,7 +499,7 @@ What is covered:
 ## 12. Known risks and edge cases
 
 - Some Klassmatt variants may render yellow comments with different inline styles. The current selector is broad enough for known yellow variants, but unusual markup could still escape detection.
-- Attention-highlight code matching is intentionally broad for 8+ digit code-like values, so unusual numeric text could still be flagged if it resembles an NCM/NBS code.
+- Attention-highlight code matching uses official four-digit NCM prefixes and official NBS 2.0 prefixes, so arbitrary numeric text is not treated as a fiscal code.
 - If `Historico.aspx` markup changes substantially, parsing may fail and the project will fallback to the sanitized read-only snapshot.
 - If the page has no valid SIN link and no visible SIN metadata, the panel will wait in an unstable state instead of guessing from item fields.
 - If Klassmatt renames or removes `IdItem`, `IdSIN`, `#txtNumero`, `#Label_infoSIN`, or the native acompanhamento link IDs, the context scorer will need an update; it intentionally prefers the visible live root over stale hidden copies.
@@ -544,4 +544,3 @@ This project is a small, tested Vite/Tampermonkey userscript that attaches only 
 - The new resolver scoring intentionally prefers the visible live `.kl-view` whose item field and summary data match the current page hints, so hidden or stale copies from the previous item no longer win.
 - The runtime now rehydrates or clears stale state when the DOM changes in place via `MutationObserver`, `popstate`, or `hashchange`, which covers Klassmatt item swaps that do not emit a clean `endRequest`.
 - The repo was pushed successfully to the moved remote, and the repository URL now resolves through the uppercase `YsraEstudos` location.
-

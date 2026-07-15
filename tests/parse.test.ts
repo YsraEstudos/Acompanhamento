@@ -34,7 +34,7 @@ describe('history parser', () => {
     expect(result.timeline[2].stage).toBe('APROVACAO-KLASSMATT');
   });
 
-  it('marks attention highlights only for lei and NCM/NBS candidates with valid starting chapters', () => {
+  it('marks attention highlights only for lei and NCM/NBS candidates with official prefixes', () => {
     const doc = new DOMParser().parseFromString(`
       <fieldset class="hist-fieldset">
         <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
@@ -49,7 +49,7 @@ describe('history parser', () => {
         </div>
         <div class="row result">
           <span id="lblHora">10:10:00</span>
-          <span id="lblDescricao">Nao destacar NCM 00000000 nem NBS 199990000</span>
+          <span id="lblDescricao">Nao destacar NCM 00000000, NCM 20260706 nem NBS 199990000</span>
         </div>
         <div class="row result">
           <span id="lblHora">10:15:00</span>
@@ -216,5 +216,3 @@ describe('history parser', () => {
     expect(scoped.summary).toEqual(result.summary);
   });
 });
-
-
