@@ -1,17 +1,20 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.15
+// @version      1.0.19
 // @author       Ysrael Xavier
-// @description  Exibe o KM Acompanhamento inline na pagina do item do Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.15/sin-inline.user.js
+// @description  Exibe o KM Acompanhamento inline e agiliza o preenchimento UNSPSC no Klassmatt.
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.19/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
 // @match        https://klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://klassmatt.com.br/*ITEM_Edita.aspx*
+// @connect      *.klassmatt.com.br
+// @connect      klassmatt.com.br
 // @grant        GM_registerMenuCommand
 // @grant        GM_unregisterMenuCommand
+// @grant        GM_xmlhttpRequest
 // @grant        unsafeWindow
 // @run-at       document-end
 // ==/UserScript==
@@ -125,14 +128,107 @@
   function resolveAbsoluteUrl(rawUrl, fallbackUrl) {
     return new URL(rawUrl || fallbackUrl, fallbackUrl);
   }
-  async function fetchHtml(url, signal) {
+  function isNetworkFetchError(error) {
+    if (!(error instanceof Error)) return false;
+    return /failed to fetch|networkerror|network request failed/i.test(error.message);
+  }
+  function getAbortError() {
+    return new DOMException("The operation was aborted.", "AbortError");
+  }
+  function parseTampermonkeyHeaders(rawHeaders = "") {
+    const headers = new Headers();
+    for (const line of rawHeaders.split(/\r?\n/)) {
+      const separator = line.indexOf(":");
+      if (separator <= 0) continue;
+      headers.append(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+    }
+    return headers;
+  }
+  function fetchWithTampermonkey(requestedUrl, signal) {
+    if (typeof GM_xmlhttpRequest !== "function") {
+      return Promise.reject(new TypeError("Failed to fetch"));
+    }
+    if (signal?.aborted) {
+      return Promise.reject(getAbortError());
+    }
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      let request = null;
+      let handleAbort = () => void 0;
+      const cleanup = () => {
+        signal?.removeEventListener("abort", handleAbort);
+      };
+      const settle = (callback) => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        callback();
+      };
+      handleAbort = () => {
+        if (settled) return;
+        request?.abort();
+        settle(() => reject(getAbortError()));
+      };
+      signal?.addEventListener("abort", handleAbort, { once: true });
+      try {
+        request = GM_xmlhttpRequest({
+          method: "GET",
+          url: requestedUrl.toString(),
+          responseType: "arraybuffer",
+          timeout: 3e4,
+          onload: (response) => {
+            settle(() => {
+              try {
+                const responseUrl = response.finalUrl || requestedUrl.toString();
+                resolve({
+                  response: new Response(response.response, {
+                    status: response.status,
+                    headers: parseTampermonkeyHeaders(response.responseHeaders)
+                  }),
+                  responseUrl,
+                  wasRedirected: responseUrl !== requestedUrl.toString()
+                });
+              } catch (error) {
+                reject(error);
+              }
+            });
+          },
+          onerror: () => settle(() => reject(new TypeError("Failed to fetch"))),
+          ontimeout: () => settle(() => reject(new Error("Network timeout"))),
+          onabort: () => settle(() => reject(getAbortError()))
+        });
+        if (signal?.aborted) handleAbort();
+      } catch (error) {
+        settle(() => reject(error));
+      }
+    });
+  }
+  async function fetchResponse(requestedUrl, signal) {
     try {
-      const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
-      const response = await fetch(url, {
+      const response = await fetch(requestedUrl.toString(), {
         credentials: "include",
         cache: "no-store",
         signal
       });
+      return {
+        response,
+        responseUrl: response.url || requestedUrl.toString(),
+        wasRedirected: response.redirected
+      };
+    } catch (error) {
+      if (isAbortError$1(error)) throw error;
+      const pageOrigin = new URL(window.location.href).origin;
+      if (!isNetworkFetchError(error) || requestedUrl.origin !== pageOrigin) {
+        throw error;
+      }
+      return fetchWithTampermonkey(requestedUrl, signal);
+    }
+  }
+  async function fetchHtml(url, signal) {
+    const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
+    try {
+      const transport = await fetchResponse(requestedUrl, signal);
+      const response = transport.response;
       if (!response.ok) {
         throw new Error(`Falha HTTP ${response.status}`);
       }
@@ -142,14 +238,17 @@
       }
       const buffer = await response.arrayBuffer();
       const html = decodeHttpText(buffer, contentType);
-      const responseUrl = resolveAbsoluteUrl(response.url || requestedUrl.toString(), requestedUrl.toString());
+      const responseUrl = resolveAbsoluteUrl(
+        transport.responseUrl || requestedUrl.toString(),
+        requestedUrl.toString()
+      );
       if (responseUrl.origin !== requestedUrl.origin) {
         throw new Error(`Redirecionamento bloqueado para origem inesperada: ${responseUrl.origin}`);
       }
       return {
         html,
         responseUrl: responseUrl.toString(),
-        wasRedirected: response.redirected || responseUrl.toString() !== requestedUrl.toString(),
+        wasRedirected: transport.wasRedirected || responseUrl.toString() !== requestedUrl.toString(),
         contentType
       };
     } catch (error) {
@@ -2052,10 +2151,11 @@
   function parseHistoryStrict(doc, baseUrl = window.location.href) {
     return finalizeParse(doc, parseHistoryStrictBuild(doc), baseUrl);
   }
-  const SETTINGS_KEY = "km_sin_sidebar_settings_v1";
+  const SETTINGS_KEY = "km_sin_sidebar_settings_v2";
+  const LEGACY_SETTINGS_KEY = "km_sin_sidebar_settings_v1";
   const SETTINGS_CHANGED_EVENT = "km-sin-sidebar-settings-changed";
   const DEFAULT_SETTINGS = {
-    alwaysOpen: true,
+    alwaysOpen: false,
     timelineMode: "yellow-only"
   };
   function normalizeTimelineMode(value) {
@@ -2067,15 +2167,25 @@
   function getInlinePanelToggleLabel(panelOpen) {
     return panelOpen ? "Ocultar painel" : "Mostrar painel";
   }
+  function parseStoredSettings(raw) {
+    const parsed = JSON.parse(raw);
+    return {
+      alwaysOpen: parsed.alwaysOpen === true,
+      timelineMode: normalizeTimelineMode(parsed.timelineMode)
+    };
+  }
   function loadSettings() {
     try {
       const raw = localStorage.getItem(SETTINGS_KEY);
-      if (!raw) return { ...DEFAULT_SETTINGS };
-      const parsed = JSON.parse(raw);
-      return {
-        alwaysOpen: parsed.alwaysOpen === true,
-        timelineMode: normalizeTimelineMode(parsed.timelineMode)
+      if (raw) return parseStoredSettings(raw);
+      const legacyRaw = localStorage.getItem(LEGACY_SETTINGS_KEY);
+      if (!legacyRaw) return { ...DEFAULT_SETTINGS };
+      const migratedSettings = {
+        ...parseStoredSettings(legacyRaw),
+        alwaysOpen: false
       };
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(migratedSettings));
+      return migratedSettings;
     } catch {
       return { ...DEFAULT_SETTINGS };
     }
@@ -2236,7 +2346,7 @@
     }
     return container.innerHTML;
   }
-  const STYLE_ID = "km-sin-sidebar-style";
+  const STYLE_ID$1 = "km-sin-sidebar-style";
   const LAYOUT_SELECTOR = '.km-sin-layout[data-km-sin-root="1"]';
   function buildInlineSnapshotSrcdoc(rawHtml, baseUrl, historyUrl) {
     const snapshotHtml = rawHtml ? sanitizeSnapshotHtml(rawHtml, baseUrl) : `<p>Nenhum snapshot seguro estava disponivel para este historico.</p><p><a href="${escapeHtml(historyUrl)}" target="_blank" rel="noreferrer noopener">Abrir historico nativo em nova aba</a></p>`;
@@ -2303,9 +2413,9 @@
 </html>`;
   }
   function injectStyles() {
-    if (document.getElementById(STYLE_ID)) return;
+    if (document.getElementById(STYLE_ID$1)) return;
     const style = document.createElement("style");
-    style.id = STYLE_ID;
+    style.id = STYLE_ID$1;
     style.textContent = '.km-sin-inline-toggle{display:inline-flex;align-items:center;margin-left:8px;vertical-align:middle}.km-sin-toggle{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:999px;padding:4px 10px;font-size:12px;font-weight:600;line-height:1.3;cursor:pointer;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}.km-sin-toggle:hover{background:#f8fafc;border-color:#94a3b8}.km-sin-layout{display:grid;grid-template-columns:minmax(0,1fr) minmax(320px,360px);gap:20px;align-items:start;margin-top:12px}.km-sin-layout.km-sin-collapsed{grid-template-columns:minmax(0,1fr)}.km-sin-main,.km-sin-aside{min-width:0;min-height:0}.km-sin-aside[hidden]{display:none!important}.km-sin-card{position:sticky;top:12px;display:flex;flex-direction:column;max-height:calc(100vh - 24px);background:#fff;border:1px solid #d4d8de;border-radius:12px;box-shadow:0 12px 28px rgba(15,23,42,.08);overflow:hidden}.km-sin-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:14px 16px 12px;border-bottom:1px solid #e7eaee;background:linear-gradient(180deg,#f8fafc 0,#fff 100%)}.km-sin-label{margin:0 0 4px;font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#52606d}.km-sin-title{margin:0;font-size:18px;line-height:1.2;color:#1f2937}.km-sin-meta,.km-sin-state{padding:0 16px;color:#52606d;font-size:12px}.km-sin-meta{padding-top:12px}.km-sin-state{padding-top:8px;padding-bottom:8px}.km-sin-state.is-error{color:#b42318}.km-sin-state.is-warning{color:#9a6700}.km-sin-actions{display:flex;gap:8px;align-items:center;flex-shrink:0;flex-wrap:wrap;justify-content:flex-end}.km-sin-link-btn,.km-sin-mode-btn{border:1px solid #cbd5e1;background:#fff;color:#334155;border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;text-decoration:none;transition:background 120ms ease,border-color 120ms ease,color 120ms ease}.km-sin-link-btn:hover,.km-sin-mode-btn:hover{background:#f8fafc;border-color:#94a3b8}.km-sin-link-btn:disabled{cursor:default;opacity:.65}.km-sin-mode-btn{border-color:#bfd7ff;color:#0f4c81;background:#eef6ff}.km-sin-mode-btn[data-mode="yellow-only"]{background:#fff4e5;border-color:#f5c67a;color:#8a4b08}.km-sin-body{flex:1 1 auto;min-height:0;padding:12px 16px 16px;overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;-webkit-overflow-scrolling:touch;scrollbar-gutter:stable;touch-action:pan-y}.km-sin-empty{padding:14px;background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;color:#52606d;font-size:13px}.km-sin-empty-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.km-sin-banner{margin-bottom:12px;padding:12px 14px;border-radius:10px;background:#fff4e5;border:1px solid #f5c67a;color:#8a4b08;font-size:13px}.km-sin-group+.km-sin-group{margin-top:16px}.km-sin-day{margin:0 0 10px;font-size:13px;font-weight:700;color:#334155}.km-sin-list,.km-sin-notes{display:grid;gap:10px}.km-sin-item{border:1px solid #e5e7eb;border-radius:10px;background:#fff;padding:12px}.km-sin-item.is-attention{border-color:#f1a4a4;background:linear-gradient(180deg,#fff6f6 0,#fffdfd 100%);box-shadow:inset 0 0 0 1px rgba(185,28,28,.08)}.km-sin-item-meta{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;font-size:12px;color:#64748b}.km-sin-time{font-weight:700;color:#334155}.km-sin-stage,.km-sin-attention-chip{display:inline-flex;align-items:center;padding:3px 8px;border-radius:999px;font-weight:700;font-size:11px;text-transform:uppercase}.km-sin-stage{background:#e2e8f0;color:#334155}.km-sin-attention-chip{background:#fee2e2;color:#b42318;border:1px solid #f5b4b4}.km-sin-desc{color:#1f2937;font-size:13px;line-height:1.5;word-break:break-word}.km-sin-desc a{color:#0f4c81}.km-sin-notes{margin-top:10px;gap:8px}.km-sin-note{padding:9px 10px;border-radius:9px;background:#fff7bf;border:1px solid #e6d665;color:#6a5600;font-size:12px;line-height:1.45;font-weight:600}.km-sin-frame{width:100%;min-height:70vh;border:1px solid #d4d8de;border-radius:10px;background:#fff;color-scheme:light;forced-color-adjust:none}@media (max-width:1360px){.km-sin-layout{grid-template-columns:minmax(0,1fr)}.km-sin-card{position:relative;top:0;max-height:none}.km-sin-body{max-height:none}}';
     document.head.appendChild(style);
   }
@@ -2732,7 +2842,7 @@
   function isAbortError(error) {
     return error instanceof Error && error.name === "AbortError";
   }
-  function getPageWindow() {
+  function getPageWindow$1() {
     return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
   }
   function getSafeHistoryUrl(rawUrl) {
@@ -3339,13 +3449,17 @@
         this.toggleHost = host;
         this.toggleButton = button;
         this.toggleParent = parent;
-      } else if (this.toggleHost.previousElementSibling !== linkEl) {
-        linkEl.insertAdjacentElement("afterend", this.toggleHost);
+      }
+      const toggleHost = this.toggleHost;
+      const toggleButton = this.toggleButton;
+      if (!toggleHost || !toggleButton) return;
+      if (toggleHost.previousElementSibling !== linkEl) {
+        linkEl.insertAdjacentElement("afterend", toggleHost);
       }
       const label = getInlinePanelToggleLabel(this.panelOpen);
-      this.toggleButton.textContent = label;
-      this.toggleButton.title = label;
-      this.toggleButton.setAttribute("aria-pressed", String(this.panelOpen));
+      toggleButton.textContent = label;
+      toggleButton.title = label;
+      toggleButton.setAttribute("aria-pressed", String(this.panelOpen));
     }
     removeInlineToggle() {
       if (this.toggleHost?.isConnected) {
@@ -3434,7 +3548,7 @@
       let mutationObserver = null;
       let mutationTimer = 0;
       const observeRoot = document.body ?? document.documentElement;
-      const timerHost = observeRoot.ownerDocument?.defaultView ?? globalThis;
+      const timerHost = observeRoot.ownerDocument?.defaultView ?? window;
       const handleMutation = () => {
         if (disposed) return;
         mutationTimer = 0;
@@ -3484,7 +3598,7 @@
           window.clearInterval(intervalId);
           return;
         }
-        const maybeManager = getPageWindow().Sys?.WebForms?.PageRequestManager?.getInstance?.();
+        const maybeManager = getPageWindow$1().Sys?.WebForms?.PageRequestManager?.getInstance?.();
         if (!maybeManager) return;
         window.clearInterval(intervalId);
         manager = maybeManager;
@@ -3557,7 +3671,414 @@
     if (!isSupportedItemPath(pathname)) return false;
     return Boolean(doc.querySelector(CONTEXT_HINT_SELECTOR));
   }
+  const STYLE_ID = "km-unspsc-quick-style";
+  const QUICK_SELECTOR = '[data-km-unspsc-quick="1"]';
+  const DEFAULT_TIMEOUT_MS = 15e3;
+  const DEFAULT_AUTO_SUBMIT_DELAY_MS = 180;
+  const SELECTORS = {
+    nativeCode: 'input#txtCodUNSPSC, input[name$="$txtCodUNSPSC"]',
+    nativeValue: 'input#txtUNSPSC, input[name$="$txtUNSPSC"]',
+    nativeLookup: 'input#ibutUNSPSC, input[name$="$ibutUNSPSC"]',
+    modal: "#tableUNSPSC",
+    modalCode: '#tableUNSPSC input[name$="$txtCodigoUnspsc"], #tableUNSPSC input#txtCodigoUnspsc',
+    modalSearch: '#tableUNSPSC input[name$="$butPesquisar"], #tableUNSPSC input#butPesquisar',
+    modalResults: "#tableUNSPSC #divUNSPSC",
+    modalGrid: "#tableUNSPSC #dgUNSPSC",
+    modalClose: '#tableUNSPSC input[name$="$butFechar"], #tableUNSPSC input#butFechar',
+    modalCancel: '#tableUNSPSC input[name$="$butCancelar"], #tableUNSPSC input#butCancelar'
+  };
+  function getPageWindow() {
+    return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+  }
+  function isUsableElement(element) {
+    if (!element.isConnected || element.hidden) return false;
+    const style = (element.getAttribute("style") || "").toLowerCase();
+    if (/\bdisplay\s*:\s*none\b/.test(style)) return false;
+    if (/\bvisibility\s*:\s*hidden\b/.test(style)) return false;
+    return !element.closest("[hidden]");
+  }
+  function findNativeUnspscElements() {
+    const values = Array.from(document.querySelectorAll(SELECTORS.nativeValue));
+    for (const value of values) {
+      if (!value.readOnly || !isUsableElement(value) || value.closest(SELECTORS.modal)) continue;
+      const scope = value.parentElement ?? document;
+      const localLookup = scope.querySelector(SELECTORS.nativeLookup);
+      const lookup = localLookup ?? document.querySelector(SELECTORS.nativeLookup);
+      if (lookup && isUsableElement(lookup)) return { value, lookup };
+    }
+    return null;
+  }
+  function hasNativeUnspscCodeInput() {
+    return Array.from(document.querySelectorAll(SELECTORS.nativeCode)).some((input) => isUsableElement(input));
+  }
+  function extractCurrentCode(value) {
+    return value.match(/^\s*(\d{8})(?:\D|$)/)?.[1] || "";
+  }
+  function setInputValue(input, value) {
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+    if (setter) setter.call(input, value);
+    else input.value = value;
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+  function findExactResult(code) {
+    const grid = document.querySelector(SELECTORS.modalGrid);
+    if (!grid) return null;
+    for (const row of grid.querySelectorAll("tr")) {
+      const codeElement = Array.from(row.querySelectorAll("a, span, td")).find((element) => element.id === "lbCodigo" || /\$lbCodigo$/.test(element.getAttribute("name") || ""));
+      if (normalizeUnspscCode(codeElement?.textContent || "") !== code) continue;
+      const selector = row.querySelector(
+        'input[name$="$ckSelUNSPSC"], input[id$="ckSelUNSPSC"]'
+      );
+      if (selector) return selector;
+    }
+    return null;
+  }
+  function normalizeUnspscCode(value) {
+    return String(value || "").replace(/\D/g, "");
+  }
+  class UnspscQuickFillApp {
+    hookAspNet;
+    timeoutMs;
+    autoSubmitDelayMs;
+    observer = null;
+    destroyAspNet = null;
+    syncTimer = 0;
+    autoSubmitTimer = 0;
+    serial = 0;
+    running = false;
+    activeCode = "";
+    statusMessage = "Digite os 8 dígitos.";
+    statusTone = "idle";
+    host = null;
+    codeInput = null;
+    status = null;
+    toast = null;
+    nativeValue = null;
+    constructor(options = {}) {
+      this.hookAspNet = options.hookAspNet ?? true;
+      this.timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+      this.autoSubmitDelayMs = options.autoSubmitDelayMs ?? DEFAULT_AUTO_SUBMIT_DELAY_MS;
+    }
+    init() {
+      this.injectStyles();
+      this.sync();
+      this.bindMutationObserver();
+      if (this.hookAspNet) this.destroyAspNet = this.bindAspNetEndRequest();
+    }
+    destroy() {
+      this.serial++;
+      this.running = false;
+      if (this.syncTimer) window.clearTimeout(this.syncTimer);
+      if (this.autoSubmitTimer) window.clearTimeout(this.autoSubmitTimer);
+      this.observer?.disconnect();
+      this.destroyAspNet?.();
+      this.removeHost();
+      this.toast?.remove();
+      document.body?.classList.remove("km-unspsc-running");
+      this.observer = null;
+      this.destroyAspNet = null;
+      this.toast = null;
+    }
+    sync() {
+      if (hasNativeUnspscCodeInput()) {
+        this.removeHost();
+        return;
+      }
+      const native = findNativeUnspscElements();
+      if (!native) {
+        this.removeHost();
+        return;
+      }
+      const existingHost = native.value.parentElement?.querySelector(QUICK_SELECTOR) || null;
+      const needsHost = !existingHost || !existingHost.isConnected || this.nativeValue !== native.value;
+      if (needsHost) {
+        if (this.host?.isConnected && this.host !== existingHost) this.host.remove();
+        this.createHost(native.value);
+      } else {
+        this.host = existingHost;
+        this.codeInput = existingHost.querySelector('[data-role="unspsc-code"]');
+        this.status = existingHost.querySelector('[data-role="unspsc-status"]');
+      }
+      this.nativeValue = native.value;
+      if (this.codeInput && document.activeElement !== this.codeInput) {
+        this.codeInput.value = this.running ? this.activeCode : extractCurrentCode(native.value.value);
+      }
+      this.renderState();
+    }
+    createHost(nativeValue) {
+      const host = document.createElement("span");
+      host.className = "km-unspsc-quick";
+      host.dataset.kmUnspscQuick = "1";
+      const label = document.createElement("span");
+      label.className = "km-unspsc-quick-label";
+      label.textContent = "Código rápido";
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "km-unspsc-quick-input";
+      input.dataset.role = "unspsc-code";
+      input.inputMode = "numeric";
+      input.autocomplete = "off";
+      input.maxLength = 16;
+      input.pattern = "[0-9]{8}";
+      input.setAttribute("aria-label", "Código UNSPSC com 8 dígitos");
+      input.value = this.running ? this.activeCode : extractCurrentCode(nativeValue.value);
+      input.addEventListener("input", this.handleInput);
+      input.addEventListener("keydown", this.handleKeyDown);
+      input.addEventListener("blur", this.handleBlur);
+      const status = document.createElement("span");
+      status.className = "km-unspsc-quick-status";
+      status.dataset.role = "unspsc-status";
+      status.setAttribute("aria-live", "polite");
+      host.append(label, input, status);
+      nativeValue.insertAdjacentElement("beforebegin", host);
+      this.host = host;
+      this.codeInput = input;
+      this.status = status;
+      this.nativeValue = nativeValue;
+    }
+    handleInput = (event) => {
+      const input = event.currentTarget;
+      const code = normalizeUnspscCode(input.value);
+      if (input.value !== code) input.value = code;
+      if (this.autoSubmitTimer) window.clearTimeout(this.autoSubmitTimer);
+      if (code.length !== 8) {
+        this.setState(
+          code.length > 8 ? "Código deve ter 8 dígitos." : "Digite os 8 dígitos.",
+          code.length > 8 ? "error" : "idle"
+        );
+        return;
+      }
+      this.autoSubmitTimer = window.setTimeout(() => {
+        this.autoSubmitTimer = 0;
+        void this.startFill(code);
+      }, this.autoSubmitDelayMs);
+    };
+    handleKeyDown = (event) => {
+      if (event.key !== "Enter") return;
+      event.preventDefault();
+      if (this.autoSubmitTimer) window.clearTimeout(this.autoSubmitTimer);
+      const code = normalizeUnspscCode(event.currentTarget.value);
+      if (code.length === 8) void this.startFill(code);
+    };
+    handleBlur = (event) => {
+      const code = normalizeUnspscCode(event.currentTarget.value);
+      if (code.length !== 8 || this.running || this.autoSubmitTimer) return;
+      void this.startFill(code);
+    };
+    async startFill(code) {
+      if (this.running || code.length !== 8) return;
+      const native = findNativeUnspscElements();
+      if (!native) {
+        this.setState("Abra a aba Classificações e tente novamente.", "error");
+        return;
+      }
+      if (extractCurrentCode(native.value.value) === code) {
+        this.setState("UNSPSC já preenchida.", "success");
+        return;
+      }
+      const serial = ++this.serial;
+      this.running = true;
+      this.activeCode = code;
+      document.body.classList.add("km-unspsc-running");
+      this.setState("Abrindo consulta UNSPSC...", "busy");
+      try {
+        const previousModal = document.querySelector(SELECTORS.modal);
+        native.lookup.click();
+        await this.waitForCondition(() => {
+          const modal = document.querySelector(SELECTORS.modal);
+          return Boolean(modal && modal !== previousModal);
+        }, serial);
+        const modalCode = this.requireInput(SELECTORS.modalCode);
+        const search = this.requireInput(SELECTORS.modalSearch);
+        setInputValue(modalCode, code);
+        this.setState("Pesquisando código UNSPSC...", "busy");
+        const previousResults = document.querySelector(SELECTORS.modalResults);
+        const previousResultsHtml = previousResults?.innerHTML || "";
+        search.click();
+        await this.waitForCondition(() => {
+          const results = document.querySelector(SELECTORS.modalResults);
+          return Boolean(
+            results && (results !== previousResults || results.innerHTML !== previousResultsHtml)
+          );
+        }, serial);
+        const resultSelector = findExactResult(code);
+        if (!resultSelector) throw new Error("UNSPSC_NOT_FOUND");
+        this.setState("Selecionando classificação...", "busy");
+        const previousGrid = document.querySelector(SELECTORS.modalGrid);
+        const previousGridHtml = previousGrid?.outerHTML || "";
+        resultSelector.click();
+        await this.waitForCondition(() => {
+          const grid = document.querySelector(SELECTORS.modalGrid);
+          return !resultSelector.isConnected || grid !== previousGrid || grid?.outerHTML !== previousGridHtml;
+        }, serial);
+        const close = this.requireInput(SELECTORS.modalClose);
+        this.setState("Aplicando UNSPSC ao item...", "busy");
+        close.click();
+        await this.waitForCondition(() => !document.querySelector(SELECTORS.modal), serial);
+        await this.waitForCondition(() => {
+          const current = findNativeUnspscElements();
+          return Boolean(current && extractCurrentCode(current.value.value) === code);
+        }, serial);
+        this.running = false;
+        this.activeCode = "";
+        document.body.classList.remove("km-unspsc-running");
+        this.sync();
+        this.setState("UNSPSC preenchida.", "success");
+      } catch (error) {
+        if (serial !== this.serial) return;
+        await this.cancelModal(serial);
+        this.running = false;
+        this.activeCode = "";
+        document.body.classList.remove("km-unspsc-running");
+        this.sync();
+        this.setState(
+          error instanceof Error && error.message === "UNSPSC_NOT_FOUND" ? "Código UNSPSC não encontrado." : "Falha na consulta. Use a lupa.",
+          "error"
+        );
+      }
+    }
+    requireInput(selector) {
+      const input = document.querySelector(selector);
+      if (!input) throw new Error(`Controle UNSPSC indisponível: ${selector}`);
+      return input;
+    }
+    waitForCondition(condition, serial) {
+      if (condition()) return Promise.resolve();
+      return new Promise((resolve, reject) => {
+        let settled = false;
+        const root = document.body ?? document.documentElement;
+        const timerHost = root.ownerDocument?.defaultView ?? window;
+        const finish = (error) => {
+          if (settled) return;
+          settled = true;
+          observer.disconnect();
+          timerHost.clearInterval(interval);
+          timerHost.clearTimeout(timeout);
+          if (error) reject(error);
+          else resolve();
+        };
+        const check = () => {
+          if (serial !== this.serial) {
+            finish(new Error("UNSPSC_CANCELLED"));
+            return;
+          }
+          if (condition()) finish();
+        };
+        const observer = new MutationObserver(check);
+        observer.observe(root, { childList: true, subtree: true, attributes: true });
+        const interval = timerHost.setInterval(check, 50);
+        const timeout = timerHost.setTimeout(() => finish(new Error("UNSPSC_TIMEOUT")), this.timeoutMs);
+      });
+    }
+    async cancelModal(serial) {
+      const cancel = document.querySelector(SELECTORS.modalCancel);
+      if (!cancel || serial !== this.serial) return;
+      try {
+        cancel.click();
+        await this.waitForCondition(() => !document.querySelector(SELECTORS.modal), serial);
+      } catch {
+      }
+    }
+    setState(message, tone) {
+      this.statusMessage = message;
+      this.statusTone = tone;
+      this.renderState();
+    }
+    renderState() {
+      if (this.codeInput) this.codeInput.disabled = this.running;
+      if (this.status) {
+        this.status.textContent = this.statusMessage;
+        this.status.dataset.tone = this.statusTone;
+      }
+      const toast = this.ensureToast();
+      toast.textContent = this.statusMessage;
+      toast.hidden = !this.running;
+    }
+    ensureToast() {
+      if (this.toast?.isConnected) return this.toast;
+      const toast = document.createElement("div");
+      toast.className = "km-unspsc-toast";
+      toast.dataset.kmUnspscToast = "1";
+      toast.hidden = true;
+      toast.setAttribute("role", "status");
+      toast.setAttribute("aria-live", "polite");
+      document.body.appendChild(toast);
+      this.toast = toast;
+      return toast;
+    }
+    clearHostRefs() {
+      this.host = null;
+      this.codeInput = null;
+      this.status = null;
+      this.nativeValue = null;
+    }
+    removeHost() {
+      for (const host of document.querySelectorAll(QUICK_SELECTOR)) host.remove();
+      this.clearHostRefs();
+    }
+    scheduleSync() {
+      if (this.syncTimer) return;
+      this.syncTimer = window.setTimeout(() => {
+        this.syncTimer = 0;
+        this.sync();
+      }, 60);
+    }
+    bindMutationObserver() {
+      const root = document.body ?? document.documentElement;
+      this.observer = new MutationObserver(() => this.scheduleSync());
+      this.observer.observe(root, { childList: true, subtree: true });
+    }
+    bindAspNetEndRequest() {
+      let disposed = false;
+      let intervalId = 0;
+      let manager = null;
+      const handler = () => this.scheduleSync();
+      const deadline = Date.now() + 8e3;
+      intervalId = window.setInterval(() => {
+        if (disposed || Date.now() > deadline) {
+          window.clearInterval(intervalId);
+          return;
+        }
+        const maybeManager = getPageWindow().Sys?.WebForms?.PageRequestManager?.getInstance?.();
+        if (!maybeManager) return;
+        window.clearInterval(intervalId);
+        manager = maybeManager;
+        manager.add_endRequest(handler);
+      }, 250);
+      return () => {
+        disposed = true;
+        if (intervalId) window.clearInterval(intervalId);
+        if (!manager) return;
+        try {
+          manager.remove_endRequest(handler);
+        } catch {
+        }
+      };
+    }
+    injectStyles() {
+      if (document.getElementById(STYLE_ID)) return;
+      const style = document.createElement("style");
+      style.id = STYLE_ID;
+      style.textContent = `
+      .km-unspsc-quick{display:flex;align-items:center;gap:7px;width:fit-content;min-height:30px;margin:0 0 5px;padding:4px 7px;border:1px solid #b8c3d3;border-left:3px solid #3d557f;background:#f6f8fb;box-sizing:border-box;font-family:Verdana,Tahoma,sans-serif}
+      .km-unspsc-quick-label{color:#3d557f;font-size:10px;font-weight:bold;white-space:nowrap;text-transform:uppercase;letter-spacing:.03em}
+      .km-unspsc-quick-input{width:92px;height:23px;padding:2px 6px;border:1px solid #7e8da5;background:#fff;color:#1f2937;box-sizing:border-box;font:bold 12px Verdana,Tahoma,sans-serif;letter-spacing:.05em}
+      .km-unspsc-quick-input:focus{outline:2px solid #93b4df;outline-offset:1px;border-color:#3d557f}
+      .km-unspsc-quick-input:disabled{background:#e9edf3;color:#52606d}
+      .km-unspsc-quick-status{min-width:142px;color:#52606d;font-size:10px;white-space:nowrap}
+      .km-unspsc-quick-status[data-tone="busy"]{color:#725400;font-weight:bold}
+      .km-unspsc-quick-status[data-tone="success"]{color:#17663a;font-weight:bold}
+      .km-unspsc-quick-status[data-tone="error"]{color:#a12622;font-weight:bold}
+      body.km-unspsc-running #tableUNSPSC{visibility:hidden!important;pointer-events:none!important}
+      .km-unspsc-toast{position:fixed;z-index:2147483647;top:22px;left:50%;transform:translateX(-50%);padding:10px 16px;border:1px solid #223c66;border-radius:3px;background:#3d557f;color:#fff;box-shadow:0 8px 24px rgba(25,40,65,.25);font:bold 12px Verdana,Tahoma,sans-serif}
+      .km-unspsc-toast[hidden]{display:none!important}
+    `;
+      document.head.appendChild(style);
+    }
+  }
   let app = null;
+  let unspscQuickFill = null;
   let alwaysOpenMenuId = null;
   let bootstrapObserver = null;
   let bootstrapCleanupTimer = 0;
@@ -3625,6 +4146,8 @@
     cleanupBootstrapObserver();
     app = new SinSidebarApp();
     app.init();
+    unspscQuickFill = new UnspscQuickFillApp();
+    unspscQuickFill.init();
   }
   syncAlwaysOpenMenu();
   if (document.readyState === "loading") {
@@ -3639,6 +4162,7 @@
     globalThis.removeEventListener(SETTINGS_CHANGED_EVENT, handleSettingsChanged);
     cleanupBootstrapObserver();
     unregisterAlwaysOpenMenu();
+    unspscQuickFill?.destroy();
     app?.destroy();
   }, { once: true });
 

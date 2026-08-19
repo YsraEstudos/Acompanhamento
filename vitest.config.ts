@@ -9,6 +9,7 @@ export default defineConfig({
         url: 'https://demo.klassmatt.com.br/'
       }
     },
+    setupFiles: ['tests/setup.ts'],
     include: ['tests/**/*.test.ts']
   }
 });

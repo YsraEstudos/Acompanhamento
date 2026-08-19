@@ -4,7 +4,7 @@ Userscript para Klassmatt que mostra o KM Acompanhamento inline na pagina do ite
 
 ## Instalar e testar
 
-Versao atual: `1.0.11`.
+Versao atual: `1.0.19`.
 
 Use este link para instalar ou atualizar o script no Tampermonkey:
 
@@ -21,14 +21,25 @@ Se voce estiver no Chrome e o script nao aparecer na pagina, faca este ajuste no
 4. Feche o Chrome completamente e abra de novo
 5. Volte ao item do Klassmatt e recarregue a pagina
 
-Se a versao instalada no Tampermonkey nao for `1.0.11`, atualize o userscript pelo link acima.
+Se a versao instalada no Tampermonkey nao for `1.0.19`, atualize o userscript pelo link acima.
+
+## UNSPSC rapido
+
+Na aba `Classificacoes`, o script adiciona um campo `Codigo rapido` acima do campo UNSPSC nativo.
+
+- Digite ou cole os 8 digitos do codigo UNSPSC.
+- Ao completar o codigo, o script pesquisa e seleciona a correspondencia exata usando o fluxo nativo do Klassmatt.
+- UNSPSC, Segmento, Familia, Classe e Mercadoria sao atualizados pelo proprio sistema.
+- A lupa original continua disponivel caso a pesquisa automatica falhe.
+- Se a tela ja possuir o campo nativo `Codigo UNSPSC`, o campo rapido nao e exibido.
+- O recurso nao clica em `Salvar`, `Prosseguir` ou `Reavaliar`.
 
 Na primeira instalacao, o script ja entra com:
 
-- acompanhamento sempre visivel ativado
+- acompanhamento fechado por padrao; clique em `Mostrar painel` para abrir
 - visualizacao de apenas comentarios amarelos ativada
 
-Se o usuario ja tinha configurado o script antes, a preferencia salva continua valendo.
+Se o usuario ja tinha configurado o script antes, o modo `Tudo` / `Amarelos` continua salvo; a antiga preferencia de sempre visivel e migrada para fechado para nao travar a pagina.
 
 ## O que mudou no uso
 

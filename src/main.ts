@@ -8,6 +8,7 @@ import {
   type SinPanelSettings
 } from './state';
 import { shouldBootstrapSinSidebar } from './runtime-guard';
+import { UnspscQuickFillApp } from './unspsc-quick-fill';
 
 declare const GM_registerMenuCommand:
   | ((caption: string, onClick: () => void, accessKey?: string) => number | string)
@@ -17,6 +18,7 @@ declare const GM_unregisterMenuCommand:
   | undefined;
 
 let app: SinSidebarApp | null = null;
+let unspscQuickFill: UnspscQuickFillApp | null = null;
 let alwaysOpenMenuId: number | string | null = null;
 let bootstrapObserver: MutationObserver | null = null;
 let bootstrapCleanupTimer = 0;
@@ -101,6 +103,8 @@ function start(): void {
   cleanupBootstrapObserver();
   app = new SinSidebarApp();
   app.init();
+  unspscQuickFill = new UnspscQuickFillApp();
+  unspscQuickFill.init();
 }
 
 syncAlwaysOpenMenu();
@@ -118,5 +122,6 @@ globalThis.addEventListener('beforeunload', () => {
   globalThis.removeEventListener(SETTINGS_CHANGED_EVENT, handleSettingsChanged as EventListener);
   cleanupBootstrapObserver();
   unregisterAlwaysOpenMenu();
+  unspscQuickFill?.destroy();
   app?.destroy();
 }, { once: true });
