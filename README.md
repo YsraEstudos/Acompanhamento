@@ -4,7 +4,7 @@ Userscript para Klassmatt que mostra o KM Acompanhamento inline na pagina do ite
 
 ## Instalar e testar
 
-Versao atual: `1.0.19`.
+Versao atual: `1.0.20`.
 
 Use este link para instalar ou atualizar o script no Tampermonkey:
 
@@ -21,7 +21,7 @@ Se voce estiver no Chrome e o script nao aparecer na pagina, faca este ajuste no
 4. Feche o Chrome completamente e abra de novo
 5. Volte ao item do Klassmatt e recarregue a pagina
 
-Se a versao instalada no Tampermonkey nao for `1.0.19`, atualize o userscript pelo link acima.
+Se a versao instalada no Tampermonkey nao for `1.0.20`, atualize o userscript pelo link acima.
 
 ## UNSPSC rapido
 

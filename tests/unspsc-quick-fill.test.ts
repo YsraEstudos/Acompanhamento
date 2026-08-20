@@ -114,6 +114,7 @@ describe('normalizeUnspscCode', () => {
 describe('UnspscQuickFillApp', () => {
   beforeEach(() => {
     document.documentElement.innerHTML = readFixture();
+    sessionStorage.clear();
   });
 
   afterEach(() => {
@@ -165,6 +166,32 @@ describe('UnspscQuickFillApp', () => {
     expect(document.querySelector('#tableUNSPSC')).toBeNull();
 
     app.destroy();
+  });
+
+  it('resumes the legacy full-postback flow after the modal reloads', async () => {
+    document.documentElement.innerHTML = readFixture().replaceAll('tabCategoriasMulti', 'tabCategorias');
+    sessionStorage.setItem('km_unspsc_pending_v1', JSON.stringify({ code: '27112104', stage: 'opening' }));
+    document.body.appendChild(buildModal());
+
+    const firstApp = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
+    firstApp.init();
+    await flush(50);
+    firstApp.destroy();
+
+    expect(JSON.parse(sessionStorage.getItem('km_unspsc_pending_v1') || '{}')).toEqual({
+      code: '27112104',
+      stage: 'searching'
+    });
+
+    const secondApp = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
+    secondApp.init();
+    await flush(80);
+
+    expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('27112104. Drill bits');
+    expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();
+    expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
+
+    secondApp.destroy();
   });
 
   it('does not start the native flow before eight digits', async () => {

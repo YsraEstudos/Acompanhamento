@@ -2,6 +2,7 @@ const STYLE_ID = 'km-unspsc-quick-style';
 const QUICK_SELECTOR = '[data-km-unspsc-quick="1"]';
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_AUTO_SUBMIT_DELAY_MS = 180;
+const PENDING_KEY = 'km_unspsc_pending_v1';
 
 const SELECTORS = {
   nativeCode: 'input#txtCodUNSPSC, input[name$="$txtCodUNSPSC"]',
@@ -33,6 +34,12 @@ interface NativeUnspscElements {
 }
 
 type StatusTone = 'idle' | 'busy' | 'success' | 'error';
+type PendingStage = 'opening' | 'searching' | 'selecting' | 'closing';
+
+interface PendingUnspsc {
+  code: string;
+  stage: PendingStage;
+}
 
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
 
@@ -78,6 +85,35 @@ function setInputValue(input: HTMLInputElement, value: string): void {
   else input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   input.dispatchEvent(new Event('change', { bubbles: true }));
+}
+
+function readPendingUnspsc(): PendingUnspsc | null {
+  try {
+    const raw = sessionStorage.getItem(PENDING_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as Partial<PendingUnspsc>;
+    return parsed.code && parsed.code.length === 8 && parsed.stage
+      ? { code: parsed.code, stage: parsed.stage }
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function writePendingUnspsc(pending: PendingUnspsc): void {
+  try {
+    sessionStorage.setItem(PENDING_KEY, JSON.stringify(pending));
+  } catch {
+    // The native flow still works when browser storage is unavailable.
+  }
+}
+
+function clearPendingUnspsc(): void {
+  try {
+    sessionStorage.removeItem(PENDING_KEY);
+  } catch {
+    // Ignore storage teardown and privacy-mode errors.
+  }
 }
 
 function findExactResult(code: string): HTMLInputElement | null {
@@ -132,6 +168,7 @@ export class UnspscQuickFillApp {
     this.sync();
     this.bindMutationObserver();
     if (this.hookAspNet) this.destroyAspNet = this.bindAspNetEndRequest();
+    void this.resumePending();
   }
 
   destroy(): void {
@@ -274,6 +311,7 @@ export class UnspscQuickFillApp {
     const serial = ++this.serial;
     this.running = true;
     this.activeCode = code;
+    writePendingUnspsc({ code, stage: 'opening' });
     document.body.classList.add('km-unspsc-running');
     this.setState('Abrindo consulta UNSPSC...', 'busy');
 
@@ -289,6 +327,7 @@ export class UnspscQuickFillApp {
       const search = this.requireInput(SELECTORS.modalSearch);
       setInputValue(modalCode, code);
       this.setState('Pesquisando código UNSPSC...', 'busy');
+      writePendingUnspsc({ code, stage: 'searching' });
 
       const previousResults = document.querySelector<HTMLElement>(SELECTORS.modalResults);
       const previousResultsHtml = previousResults?.innerHTML || '';
@@ -305,6 +344,7 @@ export class UnspscQuickFillApp {
       if (!resultSelector) throw new Error('UNSPSC_NOT_FOUND');
 
       this.setState('Selecionando classificação...', 'busy');
+      writePendingUnspsc({ code, stage: 'selecting' });
       const previousGrid = document.querySelector<HTMLElement>(SELECTORS.modalGrid);
       const previousGridHtml = previousGrid?.outerHTML || '';
       resultSelector.click();
@@ -315,6 +355,7 @@ export class UnspscQuickFillApp {
 
       const close = this.requireInput(SELECTORS.modalClose);
       this.setState('Aplicando UNSPSC ao item...', 'busy');
+      writePendingUnspsc({ code, stage: 'closing' });
       close.click();
       await this.waitForCondition(() => !document.querySelector(SELECTORS.modal), serial);
       await this.waitForCondition(() => {
@@ -324,12 +365,98 @@ export class UnspscQuickFillApp {
 
       this.running = false;
       this.activeCode = '';
+      clearPendingUnspsc();
       document.body.classList.remove('km-unspsc-running');
       this.sync();
       this.setState('UNSPSC preenchida.', 'success');
     } catch (error) {
       if (serial !== this.serial) return;
       await this.cancelModal(serial);
+      this.running = false;
+      this.activeCode = '';
+      clearPendingUnspsc();
+      document.body.classList.remove('km-unspsc-running');
+      this.sync();
+      this.setState(
+        error instanceof Error && error.message === 'UNSPSC_NOT_FOUND'
+          ? 'Código UNSPSC não encontrado.'
+          : 'Falha na consulta. Use a lupa.',
+        'error'
+      );
+    }
+  }
+
+  private async resumePending(): Promise<void> {
+    const pending = readPendingUnspsc();
+    if (!pending || this.running) return;
+
+    const native = findNativeUnspscElements();
+    if (!native) return;
+
+    const currentModal = document.querySelector(SELECTORS.modal);
+    if (!currentModal) {
+      if (pending.stage === 'closing' && extractCurrentCode(native.value.value) === pending.code) {
+        clearPendingUnspsc();
+        this.setState('UNSPSC preenchida.', 'success');
+      }
+      return;
+    }
+
+    const serial = ++this.serial;
+    this.running = true;
+    this.activeCode = pending.code;
+    document.body.classList.add('km-unspsc-running');
+    this.setState('Retomando consulta UNSPSC...', 'busy');
+
+    try {
+      if (pending.stage === 'selecting' || pending.stage === 'closing') {
+        const close = this.requireInput(SELECTORS.modalClose);
+        writePendingUnspsc({ code: pending.code, stage: 'closing' });
+        close.click();
+        await this.waitForCondition(() => !document.querySelector(SELECTORS.modal), serial);
+      } else {
+        const grid = document.querySelector(SELECTORS.modalGrid);
+        if (grid) {
+          const resultSelector = findExactResult(pending.code);
+          if (!resultSelector) throw new Error('UNSPSC_NOT_FOUND');
+
+          writePendingUnspsc({ code: pending.code, stage: 'selecting' });
+          resultSelector.click();
+          await this.waitForCondition(() => {
+            const nextGrid = document.querySelector<HTMLElement>(SELECTORS.modalGrid);
+            return !resultSelector.isConnected || nextGrid !== grid || nextGrid?.outerHTML !== grid.outerHTML;
+          }, serial);
+
+          const close = this.requireInput(SELECTORS.modalClose);
+          writePendingUnspsc({ code: pending.code, stage: 'closing' });
+          close.click();
+          await this.waitForCondition(() => !document.querySelector(SELECTORS.modal), serial);
+        } else {
+          const modalCode = this.requireInput(SELECTORS.modalCode);
+          const search = this.requireInput(SELECTORS.modalSearch);
+          setInputValue(modalCode, pending.code);
+          writePendingUnspsc({ code: pending.code, stage: 'searching' });
+          search.click();
+          await this.waitForCondition(() => {
+            const results = document.querySelector<HTMLElement>(SELECTORS.modalResults);
+            return Boolean(results?.querySelector(SELECTORS.modalGrid));
+          }, serial);
+        }
+      }
+
+      const updated = findNativeUnspscElements();
+      if (updated && extractCurrentCode(updated.value.value) === pending.code) {
+        clearPendingUnspsc();
+        this.running = false;
+        this.activeCode = '';
+        document.body.classList.remove('km-unspsc-running');
+        this.sync();
+        this.setState('UNSPSC preenchida.', 'success');
+      }
+    } catch (error) {
+      if (serial !== this.serial) return;
+      await this.cancelModal(serial);
+      clearPendingUnspsc();
       this.running = false;
       this.activeCode = '';
       document.body.classList.remove('km-unspsc-running');
