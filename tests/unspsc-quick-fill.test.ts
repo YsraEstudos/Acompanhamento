@@ -172,14 +172,22 @@ describe('UnspscQuickFillApp', () => {
     app.destroy();
   });
 
-  it('resumes and completes the legacy table1 modal after a postback', async () => {
+  it('replaces an existing UNSPSC instead of treating its old grid as search results', async () => {
     document.documentElement.innerHTML = readFixture().replaceAll('tabCategoriasMulti', 'tabCategorias');
     sessionStorage.setItem('km_unspsc_pending_v1', JSON.stringify({ code: '27112104', stage: 'opening' }));
-    document.body.appendChild(buildModal('27112104', 'Drill bits', 'table1'));
+    const modal = buildModal('27112104', 'Drill bits', 'table1');
+    modal.querySelector<HTMLElement>('#divUNSPSC')!.innerHTML = `
+      <table id="dgUNSPSC"><tbody><tr>
+        <td><input type="button" name="ctl00$Body$SelecionaUNSPSC1$dgUNSPSC$ctl02$ckSelUNSPSC"></td>
+        <td><a id="lbCodigo">40141607</a></td>
+        <td><a id="txtDescricao">Ball valves</a></td>
+      </tr></tbody></table>
+    `;
+    document.body.appendChild(modal);
 
     const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
     app.init();
-    await flush(80);
+    await flush(180);
 
     expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('27112104. Drill bits');
     expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();

@@ -437,16 +437,24 @@ export class UnspscQuickFillApp {
         close.click();
         await this.waitForCondition(() => !findUnspscModal(), serial);
       } else {
-        let grid = currentModal.querySelector<HTMLElement>(SELECTORS.modalGrid);
+        let grid = pending.stage === 'searching'
+          ? currentModal.querySelector<HTMLElement>(SELECTORS.modalGrid)
+          : null;
         if (!grid) {
           const modalCode = this.requireInput(SELECTORS.modalCode);
           const search = this.requireInput(SELECTORS.modalSearch);
+          const previousResults = currentModal.querySelector<HTMLElement>(SELECTORS.modalResults);
+          const previousResultsHtml = previousResults?.innerHTML || '';
           setInputValue(modalCode, pending.code);
           writePendingUnspsc({ code: pending.code, stage: 'searching' });
           search.click();
           await this.waitForCondition(() => {
             const results = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalResults);
-            return Boolean(results?.querySelector(SELECTORS.modalGrid));
+            return Boolean(
+              results
+              && results.querySelector(SELECTORS.modalGrid)
+              && (results !== previousResults || results.innerHTML !== previousResultsHtml)
+            );
           }, serial);
           grid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid) ?? null;
         }

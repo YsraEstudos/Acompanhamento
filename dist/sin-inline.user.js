@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.21
+// @version      1.0.22
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline e agiliza o preenchimento UNSPSC no Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.21/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.22/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -4008,16 +4008,20 @@
           close.click();
           await this.waitForCondition(() => !findUnspscModal(), serial);
         } else {
-          let grid = currentModal.querySelector(SELECTORS.modalGrid);
+          let grid = pending.stage === "searching" ? currentModal.querySelector(SELECTORS.modalGrid) : null;
           if (!grid) {
             const modalCode = this.requireInput(SELECTORS.modalCode);
             const search = this.requireInput(SELECTORS.modalSearch);
+            const previousResults = currentModal.querySelector(SELECTORS.modalResults);
+            const previousResultsHtml = previousResults?.innerHTML || "";
             setInputValue(modalCode, pending.code);
             writePendingUnspsc({ code: pending.code, stage: "searching" });
             search.click();
             await this.waitForCondition(() => {
               const results = findUnspscModal()?.querySelector(SELECTORS.modalResults);
-              return Boolean(results?.querySelector(SELECTORS.modalGrid));
+              return Boolean(
+                results && results.querySelector(SELECTORS.modalGrid) && (results !== previousResults || results.innerHTML !== previousResultsHtml)
+              );
             }, serial);
             grid = findUnspscModal()?.querySelector(SELECTORS.modalGrid) ?? null;
           }
