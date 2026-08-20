@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.22
+// @version      1.0.23
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline e agiliza o preenchimento UNSPSC no Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.22/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.23/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -3933,11 +3933,11 @@
         setInputValue(modalCode, code);
         this.setState("Pesquisando código UNSPSC...", "busy");
         writePendingUnspsc({ code, stage: "searching" });
-        const previousResults = document.querySelector(SELECTORS.modalResults);
+        const previousResults = findUnspscModal()?.querySelector(SELECTORS.modalResults) ?? null;
         const previousResultsHtml = previousResults?.innerHTML || "";
         search.click();
         await this.waitForCondition(() => {
-          const results = document.querySelector(SELECTORS.modalResults);
+          const results = findUnspscModal()?.querySelector(SELECTORS.modalResults);
           return Boolean(
             results && (results !== previousResults || results.innerHTML !== previousResultsHtml)
           );
@@ -3946,11 +3946,11 @@
         if (!resultSelector) throw new Error("UNSPSC_NOT_FOUND");
         this.setState("Selecionando classificação...", "busy");
         writePendingUnspsc({ code, stage: "selecting" });
-        const previousGrid = document.querySelector(SELECTORS.modalGrid);
+        const previousGrid = findUnspscModal()?.querySelector(SELECTORS.modalGrid) ?? null;
         const previousGridHtml = previousGrid?.outerHTML || "";
         resultSelector.click();
         await this.waitForCondition(() => {
-          const grid = document.querySelector(SELECTORS.modalGrid);
+          const grid = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
           return !resultSelector.isConnected || grid !== previousGrid || grid?.outerHTML !== previousGridHtml;
         }, serial);
         const close = this.requireInput(SELECTORS.modalClose);

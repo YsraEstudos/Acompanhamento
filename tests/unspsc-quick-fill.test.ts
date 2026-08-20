@@ -148,7 +148,8 @@ describe('UnspscQuickFillApp', () => {
     app.destroy();
   });
 
-  it('turns an eight-digit code into the complete native selection flow', async () => {
+  it('uses the modal results when the page has a duplicate divUNSPSC id', async () => {
+    document.body.insertAdjacentHTML('afterbegin', '<div id="divUNSPSC">Classification summary</div>');
     const lookup = installModalOnLookup();
     const lookupSpy = vi.spyOn(lookup, 'click');
     const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });

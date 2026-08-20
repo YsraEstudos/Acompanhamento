@@ -350,11 +350,11 @@ export class UnspscQuickFillApp {
       this.setState('Pesquisando código UNSPSC...', 'busy');
       writePendingUnspsc({ code, stage: 'searching' });
 
-      const previousResults = document.querySelector<HTMLElement>(SELECTORS.modalResults);
+      const previousResults = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalResults) ?? null;
       const previousResultsHtml = previousResults?.innerHTML || '';
       search.click();
       await this.waitForCondition(() => {
-        const results = document.querySelector<HTMLElement>(SELECTORS.modalResults);
+        const results = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalResults);
         return Boolean(
           results
           && (results !== previousResults || results.innerHTML !== previousResultsHtml)
@@ -366,11 +366,11 @@ export class UnspscQuickFillApp {
 
       this.setState('Selecionando classificação...', 'busy');
       writePendingUnspsc({ code, stage: 'selecting' });
-      const previousGrid = document.querySelector<HTMLElement>(SELECTORS.modalGrid);
+      const previousGrid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid) ?? null;
       const previousGridHtml = previousGrid?.outerHTML || '';
       resultSelector.click();
       await this.waitForCondition(() => {
-        const grid = document.querySelector<HTMLElement>(SELECTORS.modalGrid);
+        const grid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid);
         return !resultSelector.isConnected || grid !== previousGrid || grid?.outerHTML !== previousGridHtml;
       }, serial);
 
