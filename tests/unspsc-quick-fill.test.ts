@@ -11,11 +11,15 @@ function readFixture(): string {
   return fs.readFileSync(fixturePath, 'utf8');
 }
 
-function buildModal(resultCode = '27112104', description = 'Drill bits'): HTMLElement {
+function buildModal(
+  resultCode = '27112104',
+  description = 'Drill bits',
+  modalId = 'tableUNSPSC'
+): HTMLElement {
   const wrapper = document.createElement('div');
   wrapper.id = 'unspsc-modal-host';
   wrapper.innerHTML = `
-    <table id="tableUNSPSC">
+    <table id="${modalId}">
       <tbody>
         <tr>
           <td>
@@ -168,30 +172,20 @@ describe('UnspscQuickFillApp', () => {
     app.destroy();
   });
 
-  it('resumes the legacy full-postback flow after the modal reloads', async () => {
+  it('resumes and completes the legacy table1 modal after a postback', async () => {
     document.documentElement.innerHTML = readFixture().replaceAll('tabCategoriasMulti', 'tabCategorias');
     sessionStorage.setItem('km_unspsc_pending_v1', JSON.stringify({ code: '27112104', stage: 'opening' }));
-    document.body.appendChild(buildModal());
+    document.body.appendChild(buildModal('27112104', 'Drill bits', 'table1'));
 
-    const firstApp = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
-    firstApp.init();
-    await flush(50);
-    firstApp.destroy();
-
-    expect(JSON.parse(sessionStorage.getItem('km_unspsc_pending_v1') || '{}')).toEqual({
-      code: '27112104',
-      stage: 'searching'
-    });
-
-    const secondApp = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
-    secondApp.init();
+    const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
+    app.init();
     await flush(80);
 
     expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('27112104. Drill bits');
     expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();
     expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
 
-    secondApp.destroy();
+    app.destroy();
   });
 
   it('does not start the native flow before eight digits', async () => {
