@@ -8,7 +8,7 @@ Versao atual: `1.0.23`.
 
 Use este link para instalar ou atualizar o script no Tampermonkey:
 
-- https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js
+- https://ysraestudos.github.io/Acompanhamento/sin-inline.user.js
 
 Instale uma vez. Depois disso, o Tampermonkey passa a checar atualizacoes automaticamente.
 Depois da instalacao, as checagens de update usam a metadata publicada em `sin-inline.meta.js` e baixam a versao nova do release versionado correspondente.
@@ -89,7 +89,7 @@ Fluxo seguro para nova versao:
 
 Repo privado de origem:
 
-- https://github.com/YsraEstudos/km-sin-sidebar-userscript
+- https://github.com/YsraEstudos/Acompanhamento
 
 ## Observacoes
 

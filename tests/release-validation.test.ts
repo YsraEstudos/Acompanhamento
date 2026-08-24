@@ -13,8 +13,8 @@ const USERSCRIPT = `// ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
 // @version      ${VERSION}
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/${VERSION}/sin-inline.user.js
-// @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
+// @downloadURL  https://ysraestudos.github.io/Acompanhamento/releases/${VERSION}/sin-inline.user.js
+// @updateURL    https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js
 // ==/UserScript==
 
 console.log('ok');
@@ -31,9 +31,9 @@ async function createFixture() {
   const sha256 = createHash('sha256').update(USERSCRIPT).digest('hex');
   const latest = `${JSON.stringify({
     version: VERSION,
-    installUrl: 'https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js',
-    updateUrl: 'https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js',
-    downloadUrl: `https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/${VERSION}/sin-inline.user.js`,
+    installUrl: 'https://ysraestudos.github.io/Acompanhamento/sin-inline.user.js',
+    updateUrl: 'https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js',
+    downloadUrl: `https://ysraestudos.github.io/Acompanhamento/releases/${VERSION}/sin-inline.user.js`,
     sha256
   }, null, 2)}\n`;
   const checksum = `${sha256}  sin-inline.user.js\n`;
@@ -72,7 +72,7 @@ describe('release artifact validation', () => {
     const rootDir = await createFixture();
     const latestPath = path.join(rootDir, 'latest.json');
     const latest = JSON.parse(await fs.readFile(latestPath, 'utf8'));
-    latest.downloadUrl = 'https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/9.9.9/sin-inline.user.js';
+    latest.downloadUrl = 'https://ysraestudos.github.io/Acompanhamento/releases/9.9.9/sin-inline.user.js';
     await fs.writeFile(latestPath, `${JSON.stringify(latest, null, 2)}\n`, 'utf8');
 
     await expect(validateReleaseArtifacts({ projectDir: rootDir })).rejects.toThrow(/downloadUrl/i);

@@ -22,7 +22,7 @@ export async function validateReleaseArtifacts({ projectDir }) {
 
   const latest = JSON.parse(await read(projectDir, 'latest.json'));
   assertEqual(latest.version, version, 'latest.json version');
-  const expectedDownload = `https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/${version}/sin-inline.user.js`;
+  const expectedDownload = `https://ysraestudos.github.io/Acompanhamento/releases/${version}/sin-inline.user.js`;
   assertEqual(latest.downloadUrl, expectedDownload, 'latest.json downloadUrl');
 
   const digest = createHash('sha256').update(distScript).digest('hex');

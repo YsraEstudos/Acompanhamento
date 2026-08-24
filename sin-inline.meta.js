@@ -4,8 +4,8 @@
 // @version      1.0.23
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline e agiliza o preenchimento UNSPSC no Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/1.0.23/sin-inline.user.js
-// @updateURL    https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js
+// @downloadURL  https://ysraestudos.github.io/Acompanhamento/releases/1.0.23/sin-inline.user.js
+// @updateURL    https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
 // @match        https://klassmatt.com.br/*SIN_Item_Edita.aspx*

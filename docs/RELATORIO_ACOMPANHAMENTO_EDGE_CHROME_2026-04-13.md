@@ -187,8 +187,8 @@ Hipotese consistente com o relato do usuario:
 
 Depois do push da `1.0.11`, foi verificado o conteudo publicado em:
 
-- `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
-- `https://ysraestudos.github.io/km-sin-sidebar-userscript/latest.json`
+- `https://ysraestudos.github.io/Acompanhamento/sin-inline.user.js`
+- `https://ysraestudos.github.io/Acompanhamento/latest.json`
 
 Resultado observado:
 
@@ -239,8 +239,8 @@ Depois do ajuste no `postbuild` e do push para `origin/main`, foi confirmado:
 
 Mesmo assim, na checagem logo apos o push, os links publicos ainda retornavam `1.0.10`:
 
-- `https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js`
-- `https://ysraestudos.github.io/km-sin-sidebar-userscript/latest.json`
+- `https://ysraestudos.github.io/Acompanhamento/sin-inline.user.js`
+- `https://ysraestudos.github.io/Acompanhamento/latest.json`
 
 Conclusao mais provavel nesse ponto:
 

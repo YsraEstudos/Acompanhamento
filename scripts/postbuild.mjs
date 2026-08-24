@@ -33,9 +33,9 @@ const publishReleaseScriptPath = path.join(publishReleaseDir, 'sin-inline.user.j
 const publishReleaseChecksumPath = path.join(publishReleaseDir, 'SHA256SUMS.txt');
 const latestManifest = `${JSON.stringify({
   version,
-  installUrl: 'https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.user.js',
-  updateUrl: 'https://ysraestudos.github.io/km-sin-sidebar-userscript/sin-inline.meta.js',
-  downloadUrl: `https://ysraestudos.github.io/km-sin-sidebar-userscript/releases/${version}/sin-inline.user.js`,
+  installUrl: 'https://ysraestudos.github.io/Acompanhamento/sin-inline.user.js',
+  updateUrl: 'https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js',
+  downloadUrl: `https://ysraestudos.github.io/Acompanhamento/releases/${version}/sin-inline.user.js`,
   sha256
 }, null, 2)}\n`;
 const checksumContents = `${sha256}  sin-inline.user.js\n`;
