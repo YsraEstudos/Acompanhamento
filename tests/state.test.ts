@@ -11,8 +11,8 @@ describe('sidebar settings', () => {
     localStorage.clear();
   });
 
-  it('defaults to always-open and yellow-only on first run', () => {
-    expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
+  it('defaults to closed and yellow-only on first run', () => {
+    expect(loadSettings()).toEqual({ alwaysOpen: false, timelineMode: 'yellow-only' });
   });
 
   it('keeps saved preferences untouched', () => {
@@ -27,6 +27,19 @@ describe('sidebar settings', () => {
       timelineMode: 'yellow-only'
     });
     expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
+  });
+
+  it('migrates the old always-open setting to the safer closed default', () => {
+    localStorage.setItem('km_sin_sidebar_settings_v1', JSON.stringify({
+      alwaysOpen: true,
+      timelineMode: 'all'
+    }));
+
+    expect(loadSettings()).toEqual({ alwaysOpen: false, timelineMode: 'all' });
+    expect(JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}')).toEqual({
+      alwaysOpen: false,
+      timelineMode: 'all'
+    });
   });
 
   it('exposes separate labels for the menu and the inline panel toggle', () => {

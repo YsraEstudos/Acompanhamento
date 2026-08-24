@@ -194,19 +194,15 @@ describe('SinSidebarApp', () => {
     delete (globalThis as any).Sys;
   });
 
-  it('starts open on a clean install with yellow-only mode already active', async () => {
+  it('keeps the panel closed on a clean install with yellow-only mode ready', async () => {
     const fetchMock = vi.fn(async () => buildHistoryResponse(readFixture('hist-strict.html')));
     vi.stubGlobal('fetch', fetchMock);
 
     const app = await initApp({ hookAspNet: false });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('.km-sin-layout')).not.toBeNull();
-    expect(document.querySelector('.km-sin-title')?.textContent).toBe('KM Acompanhamento');
-    expect(document.querySelector<HTMLButtonElement>('[data-role="mode"]')?.textContent).toBe('Tudo');
-    expect(loadSettings()).toEqual({ alwaysOpen: true, timelineMode: 'yellow-only' });
-    expect(document.querySelector<HTMLButtonElement>('.km-sin-toggle')?.textContent).toBe('Ocultar painel');
-    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(1);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(document.querySelector('.km-sin-layout')).toBeNull();
+    expect(loadSettings()).toEqual({ alwaysOpen: false, timelineMode: 'yellow-only' });
     app.destroy();
   });
 
@@ -568,6 +564,59 @@ describe('SinSidebarApp', () => {
     app.destroy();
   });
 
+  it('ignores mutations inside its own panel while watching the page context', async () => {
+    setSettings({ alwaysOpen: true, timelineMode: 'all' });
+    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(readFixture('hist-strict.html'))));
+
+    const app = await initApp({ hookAspNet: false });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await flush();
+    const captureContextSignature = vi.spyOn(app as any, 'captureContextSignature');
+    const state = document.querySelector<HTMLElement>('.km-sin-state')!;
+    state.textContent = 'estado interno';
+
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await flush();
+
+    expect(captureContextSignature).not.toHaveBeenCalled();
+    app.destroy();
+  });
+
+  it('bounds completed history cache entries across item switches', async () => {
+    vi.useFakeTimers();
+    setSettings({ alwaysOpen: true, timelineMode: 'all' });
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const id = new URL(String(input)).searchParams.get('Id') || '209355';
+      return buildHistoryResponse(wrapHistoryHtml(`
+        <fieldset class="hist-fieldset">
+          <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
+          <div class="row"><a id="hlinkUsuario">USR.TESTE*</a></div>
+          <div class="row result">
+            <span id="lblHora">10:00:00</span>
+            <span id="lblDescricao">Historico da SIN ${id}</span>
+          </div>
+        </fieldset>
+      `, `source=SIN&Id=${id}&SomenteLeitura=1`));
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    const app = new SinSidebarApp();
+    app.init();
+    await vi.advanceTimersByTimeAsync(180);
+    await flushMicrotasks();
+
+    for (let id = 209356; id <= 209361; id++) {
+      document.body.innerHTML = buildItemPage({ sinId: String(id) });
+      window.history.replaceState({}, '', `https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=${id}`);
+      await vi.advanceTimersByTimeAsync(180);
+      await flushMicrotasks();
+    }
+
+    const cache = (app as any).cache as Map<string, unknown>;
+    expect(cache.size).toBeLessThanOrEqual(5);
+    app.destroy();
+  });
+
   it('persists the always-open preference together with the timeline mode', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
     const fetchMock = vi.fn(async () => buildHistoryResponse(mixedHistory));
@@ -813,7 +862,7 @@ describe('SinSidebarApp', () => {
       arrayBuffer: async () => bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength),
       url: 'https://attacker.example/Historico.aspx?source=SIN&Id=209355&SomenteLeitura=1',
       redirected: true
-    }) as Response));
+    }) as unknown as Response));
 
     const app = await initApp({ hookAspNet: false });
 
@@ -838,7 +887,7 @@ describe('SinSidebarApp', () => {
 
   it('renders large timelines in batches and loads more on demand', async () => {
     setSettings({ alwaysOpen: true, timelineMode: 'all' });
-    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(buildLargeHistory(40))));
+    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(buildLargeHistory(70))));
 
     const app = await initApp({ hookAspNet: false });
     await openPanel();
@@ -846,12 +895,23 @@ describe('SinSidebarApp', () => {
     expect(document.querySelectorAll('.km-sin-item')).toHaveLength(30);
     const loadMoreButton = document.querySelector<HTMLButtonElement>('[data-act="load-more"]');
     expect(loadMoreButton).not.toBeNull();
+    const firstItem = document.querySelector('.km-sin-item');
 
     loadMoreButton?.click();
     await flush();
     await flush();
 
-    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(40);
+    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(60);
+    expect(document.querySelector('.km-sin-item')).toBe(firstItem);
+    expect(document.querySelector<HTMLButtonElement>('[data-act="load-more"]')?.textContent)
+      .toBe('Carregar mais (60/70)');
+
+    document.querySelector<HTMLButtonElement>('[data-act="load-more"]')?.click();
+    await flush();
+    await flush();
+
+    expect(document.querySelectorAll('.km-sin-item')).toHaveLength(70);
+    expect(document.querySelector('.km-sin-item')).toBe(firstItem);
     expect(document.querySelector('[data-act="load-more"]')).toBeNull();
     app.destroy();
   });

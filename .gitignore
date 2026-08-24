@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Scratch and temporary directories
+.codeflow-cache/
+out.log
+output/
+tmp/
+architecture_analysis.html
+architecture_graph.json
+
+# OS files
+.DS_Store
+Thumbs.db

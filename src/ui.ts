@@ -305,6 +305,55 @@ export function renderTimeline(shell: ShellRefs, model: TimelineViewModel): void
   shell.bodyEl.replaceChildren(fragment);
 }
 
+export function appendTimeline(shell: ShellRefs, model: TimelineViewModel): void {
+  const loadMoreButton = shell.bodyEl.querySelector<HTMLElement>('[data-act="load-more"]');
+  loadMoreButton?.parentElement?.remove();
+
+  const groups = Array.from(shell.bodyEl.querySelectorAll<HTMLElement>('.km-sin-group'));
+  const lastGroup = groups.at(-1) || null;
+  let currentDay = lastGroup?.querySelector<HTMLElement>('.km-sin-day')?.textContent || '';
+  let list = lastGroup?.querySelector<HTMLElement>('.km-sin-list') || null;
+
+  for (const event of model.timeline) {
+    if (event.dia !== currentDay || !list) {
+      currentDay = event.dia;
+      const section = document.createElement('section');
+      section.className = 'km-sin-group';
+
+      const heading = document.createElement('h3');
+      heading.className = 'km-sin-day';
+      heading.textContent = currentDay || 'Sem data';
+
+      list = document.createElement('div');
+      list.className = 'km-sin-list';
+      section.append(heading, list);
+      shell.bodyEl.appendChild(section);
+    }
+
+    list.appendChild(buildEventNode(event, model.historyUrl));
+  }
+
+  if (
+    model.onLoadMore
+    && typeof model.totalCount === 'number'
+    && typeof model.loadedCount === 'number'
+    && model.loadedCount < model.totalCount
+  ) {
+    const actions = document.createElement('div');
+    actions.className = 'km-sin-empty-actions';
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'km-sin-link-btn';
+    button.dataset.act = 'load-more';
+    button.textContent = `Carregar mais (${model.loadedCount}/${model.totalCount})`;
+    button.onclick = model.onLoadMore;
+
+    actions.appendChild(button);
+    shell.bodyEl.appendChild(actions);
+  }
+}
+
 export function renderIframeFallbackPrompt(shell: ShellRefs, diagnostic: string | undefined, onDemandLoad: () => void): void {
   const fragment = document.createDocumentFragment();
 
@@ -368,4 +417,3 @@ export function renderIframeFallback(
   fragment.appendChild(iframe);
   shell.bodyEl.replaceChildren(fragment);
 }
-

@@ -38,7 +38,7 @@ describe('fetchHtml security checks', () => {
       arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
       url: 'https://attacker.example/Historico.aspx?source=SIN&Id=209355&SomenteLeitura=1',
       redirected: true
-    }) as Response));
+    }) as unknown as Response));
 
     await expect(fetchHtml(
       'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355&SomenteLeitura=1'
@@ -55,7 +55,7 @@ describe('fetchHtml security checks', () => {
       arrayBuffer: async () => buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength),
       url: 'https://attacker.example/Historico.aspx?source=SIN&Id=209355&SomenteLeitura=1',
       redirected: false
-    }) as Response));
+    }) as unknown as Response));
 
     await expect(fetchHtml(
       'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355&SomenteLeitura=1'

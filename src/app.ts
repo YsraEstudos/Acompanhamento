@@ -23,6 +23,7 @@ import {
   ensureShell,
   injectStyles,
   renderEmpty,
+  appendTimeline,
   renderIframeFallback,
   renderIframeFallbackPrompt,
   renderTimeline,
@@ -75,7 +76,57 @@ interface ParsedTimelineState {
 }
 
 const RENDER_BATCH_SIZE = 30;
+const MAX_HISTORY_CACHE_ENTRIES = 5;
+const CONTEXT_MUTATION_SELECTOR = [
+  '#UpdatePanel1',
+  '.kl-view',
+  '#DV_Resumo_sin',
+  '#Label_infoSIN',
+  '#hButAcompanhamentoSIN',
+  '#hlkObs',
+  '#txtNumero'
+].join(', ');
+const OWN_UI_MUTATION_SELECTOR = [
+  '.km-sin-layout',
+  '.km-sin-inline-toggle',
+  '[data-km-unspsc-quick="1"]',
+  '[data-km-unspsc-toast="1"]',
+  '#km-sin-sidebar-style',
+  '#km-unspsc-quick-style'
+].join(', ');
 declare const unsafeWindow: (Window & typeof globalThis) | undefined;
+
+function getMutationElement(node: Node): Element | null {
+  if (node.nodeType === 1) return node as Element;
+  return node.parentElement;
+}
+
+function isOwnedUiNode(node: Node): boolean {
+  const element = getMutationElement(node);
+  return Boolean(element?.matches(OWN_UI_MUTATION_SELECTOR) || element?.closest(OWN_UI_MUTATION_SELECTOR));
+}
+
+function nodeTouchesContext(node: Node): boolean {
+  const element = getMutationElement(node);
+  return Boolean(
+    element?.matches(CONTEXT_MUTATION_SELECTOR)
+    || element?.closest(CONTEXT_MUTATION_SELECTOR)
+    || element?.querySelector(CONTEXT_MUTATION_SELECTOR)
+  );
+}
+
+function hasRelevantContextMutation(records: MutationRecord[]): boolean {
+  return records.some((record) => {
+    const target = getMutationElement(record.target);
+    if (target?.closest(OWN_UI_MUTATION_SELECTOR)) return false;
+    if (target?.matches(CONTEXT_MUTATION_SELECTOR) || target?.closest(CONTEXT_MUTATION_SELECTOR)) return true;
+
+    return [...record.addedNodes, ...record.removedNodes].some((node) => {
+      if (isOwnedUiNode(node)) return false;
+      return nodeTouchesContext(node);
+    });
+  });
+}
 
 function resolveRefreshMode(options: AppOptions): RefreshMode {
   return options.refreshMode ?? 'manual';
@@ -253,8 +304,9 @@ export class SinSidebarApp {
     const shell = this.resolveConnectedShell();
     if (!shell || !this.latestParsed) return;
     const visibleTimeline = this.getVisibleTimeline();
+    const previousCount = this.renderedCount;
     this.renderedCount = Math.min(this.renderedCount + RENDER_BATCH_SIZE, visibleTimeline.length);
-    this.renderStoredTimeline(shell);
+    this.renderStoredTimeline(shell, previousCount);
   };
 
   private readonly handleStorageEvent = (event: Event): void => {
@@ -524,7 +576,7 @@ export class SinSidebarApp {
     renderEmpty(shell, displayMsg || 'Nao foi possivel renderizar o acompanhamento.');
   }
 
-  private renderStoredTimeline(shell: ShellRefs): void {
+  private renderStoredTimeline(shell: ShellRefs, appendFrom?: number): void {
     if (!this.latestParsed) return;
 
     const visibleTimeline = this.getVisibleTimeline();
@@ -540,16 +592,27 @@ export class SinSidebarApp {
       this.renderedCount = Math.min(this.renderedCount, visibleTimeline.length);
     }
 
-    const renderedTimeline = visibleTimeline.slice(0, this.renderedCount);
-    setShellState(shell, this.buildTimelineSummary(renderedTimeline.length, visibleTimeline.length), 'default');
-    renderTimeline(shell, {
+    const renderedTimeline = appendFrom === undefined
+      ? visibleTimeline.slice(0, this.renderedCount)
+      : visibleTimeline.slice(appendFrom, this.renderedCount);
+    const loadedCount = appendFrom === undefined ? renderedTimeline.length : this.renderedCount;
+    setShellState(shell, this.buildTimelineSummary(loadedCount, visibleTimeline.length), 'default');
+    const model = {
       historyUrl: this.latestParsed.historyUrl,
       diagnostic: this.latestParsed.result.diagnostic,
       timeline: renderedTimeline,
-      loadedCount: renderedTimeline.length,
+      loadedCount,
       totalCount: visibleTimeline.length,
       onLoadMore: renderedTimeline.length < visibleTimeline.length ? this.handleLoadMoreClick : null
-    });
+    };
+
+    if (appendFrom === undefined) {
+      renderTimeline(shell, model);
+    } else {
+      appendTimeline(shell, {
+        ...model
+      });
+    }
   }
 
   private async getHistoryResult(context: SinPageContext, force = false): Promise<SinHistoryResult> {
@@ -568,8 +631,13 @@ export class SinSidebarApp {
       this.cache.delete(cacheKey);
       this.purgeStaleCacheEntries(context.itemId, cacheKey);
     }
-    if (!force && this.cache.has(cacheKey)) {
-      return this.cache.get(cacheKey)!;
+    if (!force) {
+      const cached = this.cache.get(cacheKey);
+      if (cached) {
+        this.cache.delete(cacheKey);
+        this.cache.set(cacheKey, cached);
+        return cached;
+      }
     }
     if (!force && this.inflight.has(cacheKey)) {
       return this.inflight.get(cacheKey)!;
@@ -709,7 +777,7 @@ export class SinSidebarApp {
               inlineBaseUrl
             };
 
-        this.cache.set(cacheKey, result);
+        this.setCachedHistory(cacheKey, result);
         this.purgeStaleCacheEntries(context.itemId, cacheKey);
         return result;
       } catch (error) {
@@ -842,14 +910,20 @@ export class SinSidebarApp {
       this.toggleHost = host;
       this.toggleButton = button;
       this.toggleParent = parent;
-    } else if (this.toggleHost.previousElementSibling !== linkEl) {
-      linkEl.insertAdjacentElement('afterend', this.toggleHost);
+    }
+
+    const toggleHost = this.toggleHost;
+    const toggleButton = this.toggleButton;
+    if (!toggleHost || !toggleButton) return;
+
+    if (toggleHost.previousElementSibling !== linkEl) {
+      linkEl.insertAdjacentElement('afterend', toggleHost);
     }
 
     const label = getInlinePanelToggleLabel(this.panelOpen);
-    this.toggleButton.textContent = label;
-    this.toggleButton.title = label;
-    this.toggleButton.setAttribute('aria-pressed', String(this.panelOpen));
+    toggleButton.textContent = label;
+    toggleButton.title = label;
+    toggleButton.setAttribute('aria-pressed', String(this.panelOpen));
   }
 
   private removeInlineToggle(): void {
@@ -958,7 +1032,7 @@ export class SinSidebarApp {
     let mutationObserver: MutationObserver | null = null;
     let mutationTimer = 0;
     const observeRoot = document.body ?? document.documentElement;
-    const timerHost = observeRoot.ownerDocument?.defaultView ?? globalThis;
+    const timerHost = observeRoot.ownerDocument?.defaultView ?? window;
 
     const handleMutation = (): void => {
       if (disposed) return;
@@ -976,8 +1050,8 @@ export class SinSidebarApp {
 
     if (observeRoot) {
       this.observedContextSignature = this.captureContextSignature();
-      mutationObserver = new MutationObserver(() => {
-        if (mutationTimer) return;
+      mutationObserver = new MutationObserver((records) => {
+        if (!hasRelevantContextMutation(records) || mutationTimer) return;
         mutationTimer = timerHost.setTimeout(handleMutation, 80);
       });
 
@@ -1043,6 +1117,17 @@ export class SinSidebarApp {
       context.itemId || 'sem-item',
       context.historyIdentity?.fingerprint || context.historyUrl || 'sem-historico'
     ].join('|');
+  }
+
+  private setCachedHistory(cacheKey: string, result: SinHistoryResult): void {
+    this.cache.delete(cacheKey);
+    this.cache.set(cacheKey, result);
+
+    while (this.cache.size > MAX_HISTORY_CACHE_ENTRIES) {
+      const oldestKey = this.cache.keys().next().value;
+      if (oldestKey === undefined) break;
+      this.cache.delete(oldestKey);
+    }
   }
 
   private syncSettingsFromStorage(): void {

@@ -5,11 +5,12 @@ export interface SinPanelSettings {
   timelineMode: TimelineMode;
 }
 
-export const SETTINGS_KEY = 'km_sin_sidebar_settings_v1';
+export const SETTINGS_KEY = 'km_sin_sidebar_settings_v2';
+const LEGACY_SETTINGS_KEY = 'km_sin_sidebar_settings_v1';
 export const SETTINGS_CHANGED_EVENT = 'km-sin-sidebar-settings-changed';
 
 const DEFAULT_SETTINGS: SinPanelSettings = {
-  alwaysOpen: true,
+  alwaysOpen: false,
   timelineMode: 'yellow-only'
 };
 
@@ -27,15 +28,28 @@ export function getInlinePanelToggleLabel(panelOpen: boolean): string {
   return panelOpen ? 'Ocultar painel' : 'Mostrar painel';
 }
 
+function parseStoredSettings(raw: string): SinPanelSettings {
+  const parsed = JSON.parse(raw) as Partial<SinPanelSettings>;
+  return {
+    alwaysOpen: parsed.alwaysOpen === true,
+    timelineMode: normalizeTimelineMode(parsed.timelineMode)
+  };
+}
+
 export function loadSettings(): SinPanelSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (!raw) return { ...DEFAULT_SETTINGS };
-    const parsed = JSON.parse(raw) as Partial<SinPanelSettings>;
-    return {
-      alwaysOpen: parsed.alwaysOpen === true,
-      timelineMode: normalizeTimelineMode(parsed.timelineMode)
+    if (raw) return parseStoredSettings(raw);
+
+    const legacyRaw = localStorage.getItem(LEGACY_SETTINGS_KEY);
+    if (!legacyRaw) return { ...DEFAULT_SETTINGS };
+
+    const migratedSettings: SinPanelSettings = {
+      ...parseStoredSettings(legacyRaw),
+      alwaysOpen: false
     };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(migratedSettings));
+    return migratedSettings;
   } catch {
     return { ...DEFAULT_SETTINGS };
   }

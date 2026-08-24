@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { parseHistory, scopeTimelineToItem } from '../src/parse';
+import { parseHistory, resolveNearestItemIds, scopeTimelineToItem } from '../src/parse';
 
 const fixturesDir = path.resolve(process.cwd(), 'tests', 'fixtures');
 
@@ -11,6 +11,22 @@ function parseFixture(name: string) {
 }
 
 describe('history parser', () => {
+  it('resolves nearest item markers in one linear pass, preserving ties', () => {
+    expect(resolveNearestItemIds([
+      { index: 1, itemId: 'A' },
+      { index: 3, itemId: 'B' },
+      { index: 5, itemId: 'B' }
+    ], 7)).toEqual([
+      ['A'],
+      ['A'],
+      ['A', 'B'],
+      ['B'],
+      ['B'],
+      ['B'],
+      ['B']
+    ]);
+  });
+
   it('parses strict history HTML and keeps yellow comments', () => {
     const result = parseFixture('hist-strict.html');
 

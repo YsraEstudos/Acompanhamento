@@ -4,12 +4,15 @@
     "module": "ESNext",
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "moduleResolution": "bundler",
+    "rootDir": ".",
     "strict": true,
+    "noUncheckedSideEffectImports": true,
+    "useUnknownInCatchVariables": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "noEmit": true,
     "forceConsistentCasingInFileNames": true,
-    "types": ["vite/client", "vitest/globals"]
+    "types": ["vite/client", "vitest/globals", "tampermonkey"]
   },
   "include": ["src", "tests", "vite.config.ts", "vitest.config.ts"]
 }

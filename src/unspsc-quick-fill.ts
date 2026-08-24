@@ -1,5 +1,7 @@
 const STYLE_ID = 'km-unspsc-quick-style';
 const QUICK_SELECTOR = '[data-km-unspsc-quick="1"]';
+const TOAST_SELECTOR = '[data-km-unspsc-toast="1"]';
+const OWNED_SELECTOR = `${QUICK_SELECTOR}, ${TOAST_SELECTOR}`;
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_AUTO_SUBMIT_DELAY_MS = 180;
 const PENDING_KEY = 'km_unspsc_pending_v1';
@@ -559,15 +561,26 @@ export class UnspscQuickFillApp {
   }
 
   private renderState(): void {
-    if (this.codeInput) this.codeInput.disabled = this.running;
+    if (this.codeInput && this.codeInput.disabled !== this.running) {
+      this.codeInput.disabled = this.running;
+    }
     if (this.status) {
-      this.status.textContent = this.statusMessage;
-      this.status.dataset.tone = this.statusTone;
+      if (this.status.textContent !== this.statusMessage) {
+        this.status.textContent = this.statusMessage;
+      }
+      if (this.status.dataset.tone !== this.statusTone) {
+        this.status.dataset.tone = this.statusTone;
+      }
     }
 
     const toast = this.ensureToast();
-    toast.textContent = this.statusMessage;
-    toast.hidden = !this.running;
+    if (toast.textContent !== this.statusMessage) {
+      toast.textContent = this.statusMessage;
+    }
+    const nextHidden = !this.running;
+    if (toast.hidden !== nextHidden) {
+      toast.hidden = nextHidden;
+    }
   }
 
   private ensureToast(): HTMLElement {
@@ -605,7 +618,22 @@ export class UnspscQuickFillApp {
 
   private bindMutationObserver(): void {
     const root = document.body ?? document.documentElement;
-    this.observer = new MutationObserver(() => this.scheduleSync());
+    this.observer = new MutationObserver((records) => {
+      const hasExternalMutation = records.some((record) => {
+        const target = record.target instanceof Element
+          ? record.target
+          : record.target.parentElement;
+        if (target?.closest(OWNED_SELECTOR)) return false;
+
+        const changedNodes = [...record.addedNodes, ...record.removedNodes];
+        return changedNodes.length === 0 || changedNodes.some((node) => {
+          if (!(node instanceof Element)) return true;
+          return !node.matches(OWNED_SELECTOR) && !node.querySelector(OWNED_SELECTOR);
+        });
+      });
+
+      if (hasExternalMutation) this.scheduleSync();
+    });
     this.observer.observe(root, { childList: true, subtree: true });
   }
 

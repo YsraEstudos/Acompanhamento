@@ -96,6 +96,32 @@ export interface KlassmattErrorInfo {
   errorId: string | null;
 }
 
+interface TampermonkeyResponse {
+  status: number;
+  response: ArrayBuffer;
+  responseHeaders?: string;
+  finalUrl?: string;
+}
+
+interface TampermonkeyRequestDetails {
+  method: 'GET';
+  url: string;
+  responseType: 'arraybuffer';
+  timeout: number;
+  onload: (response: TampermonkeyResponse) => void;
+  onerror: () => void;
+  ontimeout: () => void;
+  onabort: () => void;
+}
+
+interface TampermonkeyRequestHandle {
+  abort: () => void;
+}
+
+declare const GM_xmlhttpRequest:
+  | ((details: TampermonkeyRequestDetails) => TampermonkeyRequestHandle)
+  | undefined;
+
 export function detectKlassmattErrorPage(doc: Document): KlassmattErrorInfo {
   const formAction = doc.querySelector('form')?.getAttribute('action') || '';
   if (/Erro\.aspx/i.test(formAction)) {
@@ -137,17 +163,141 @@ function resolveAbsoluteUrl(rawUrl: string, fallbackUrl: string): URL {
   return new URL(rawUrl || fallbackUrl, fallbackUrl);
 }
 
-export async function fetchHtml(
-  url: string,
+interface FetchTransportResult {
+  response: Response;
+  responseUrl: string;
+  wasRedirected: boolean;
+}
+
+function isNetworkFetchError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  return /failed to fetch|networkerror|network request failed/i.test(error.message);
+}
+
+function getAbortError(): DOMException {
+  return new DOMException('The operation was aborted.', 'AbortError');
+}
+
+function parseTampermonkeyHeaders(rawHeaders: string = ''): Headers {
+  const headers = new Headers();
+
+  for (const line of rawHeaders.split(/\r?\n/)) {
+    const separator = line.indexOf(':');
+    if (separator <= 0) continue;
+    headers.append(line.slice(0, separator).trim(), line.slice(separator + 1).trim());
+  }
+
+  return headers;
+}
+
+function fetchWithTampermonkey(
+  requestedUrl: URL,
   signal?: AbortSignal
-): Promise<FetchHtmlResult> {
+): Promise<FetchTransportResult> {
+  if (typeof GM_xmlhttpRequest !== 'function') {
+    return Promise.reject(new TypeError('Failed to fetch'));
+  }
+
+  if (signal?.aborted) {
+    return Promise.reject(getAbortError());
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    let request: TampermonkeyRequestHandle | null = null;
+    let handleAbort = (): void => undefined;
+
+    const cleanup = (): void => {
+      signal?.removeEventListener('abort', handleAbort);
+    };
+
+    const settle = (callback: () => void): void => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      callback();
+    };
+
+    handleAbort = (): void => {
+      if (settled) return;
+      request?.abort();
+      settle(() => reject(getAbortError()));
+    };
+
+    signal?.addEventListener('abort', handleAbort, { once: true });
+
+    try {
+      request = GM_xmlhttpRequest({
+        method: 'GET',
+        url: requestedUrl.toString(),
+        responseType: 'arraybuffer',
+        timeout: 30000,
+        onload: (response) => {
+          settle(() => {
+            try {
+              const responseUrl = response.finalUrl || requestedUrl.toString();
+              resolve({
+                response: new Response(response.response, {
+                  status: response.status,
+                  headers: parseTampermonkeyHeaders(response.responseHeaders)
+                }),
+                responseUrl,
+                wasRedirected: responseUrl !== requestedUrl.toString()
+              });
+            } catch (error) {
+              reject(error);
+            }
+          });
+        },
+        onerror: () => settle(() => reject(new TypeError('Failed to fetch'))),
+        ontimeout: () => settle(() => reject(new Error('Network timeout'))),
+        onabort: () => settle(() => reject(getAbortError()))
+      });
+
+      if (signal?.aborted) handleAbort();
+    } catch (error) {
+      settle(() => reject(error));
+    }
+  });
+}
+
+async function fetchResponse(
+  requestedUrl: URL,
+  signal?: AbortSignal
+): Promise<FetchTransportResult> {
   try {
-    const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
-    const response = await fetch(url, {
+    const response = await fetch(requestedUrl.toString(), {
       credentials: 'include',
       cache: 'no-store',
       signal
     });
+
+    return {
+      response,
+      responseUrl: response.url || requestedUrl.toString(),
+      wasRedirected: response.redirected
+    };
+  } catch (error) {
+    if (isAbortError(error)) throw error;
+
+    const pageOrigin = new URL(window.location.href).origin;
+    if (!isNetworkFetchError(error) || requestedUrl.origin !== pageOrigin) {
+      throw error;
+    }
+
+    return fetchWithTampermonkey(requestedUrl, signal);
+  }
+}
+
+export async function fetchHtml(
+  url: string,
+  signal?: AbortSignal
+): Promise<FetchHtmlResult> {
+  const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
+
+  try {
+    const transport = await fetchResponse(requestedUrl, signal);
+    const response = transport.response;
 
     if (!response.ok) {
       throw new Error(`Falha HTTP ${response.status}`);
@@ -160,7 +310,10 @@ export async function fetchHtml(
 
     const buffer = await response.arrayBuffer();
     const html = decodeHttpText(buffer, contentType);
-    const responseUrl = resolveAbsoluteUrl(response.url || requestedUrl.toString(), requestedUrl.toString());
+    const responseUrl = resolveAbsoluteUrl(
+      transport.responseUrl || requestedUrl.toString(),
+      requestedUrl.toString()
+    );
 
     if (responseUrl.origin !== requestedUrl.origin) {
       throw new Error(`Redirecionamento bloqueado para origem inesperada: ${responseUrl.origin}`);
@@ -169,7 +322,7 @@ export async function fetchHtml(
     return {
       html,
       responseUrl: responseUrl.toString(),
-      wasRedirected: response.redirected || responseUrl.toString() !== requestedUrl.toString(),
+      wasRedirected: transport.wasRedirected || responseUrl.toString() !== requestedUrl.toString(),
       contentType
     };
   } catch (error) {

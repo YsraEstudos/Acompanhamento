@@ -1,0 +1,1 @@
+f3bb381e75fa992d1a43074390caeaa868a9098b3eda23b9564eb56e9c3d56bc  sin-inline.user.js

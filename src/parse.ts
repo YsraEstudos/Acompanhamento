@@ -41,6 +41,11 @@ export interface ItemScopedTimelineResult {
   diagnostic?: string;
 }
 
+export interface ItemMarker {
+  index: number;
+  itemId: string;
+}
+
 interface RawEvent {
   dia: string;
   hora: string;
@@ -76,8 +81,8 @@ const YELLOW_STYLE_PATTERNS = [
   /#999900\b/i
 ];
 
-const VALID_NCM_PREFIX_SET = new Set(VALID_NCM_PREFIXES);
-const VALID_NBS_PREFIX_SET = new Set(VALID_NBS_PREFIXES);
+const VALID_NCM_PREFIX_SET: ReadonlySet<string> = new Set(VALID_NCM_PREFIXES);
+const VALID_NBS_PREFIX_SET: ReadonlySet<string> = new Set(VALID_NBS_PREFIXES);
 
 function normalizeCodeDigits(value: string): string {
   return value.replace(/\D+/g, '');
@@ -159,6 +164,47 @@ function dedupeStrings(values: string[]): string[] {
   return output;
 }
 
+export function resolveNearestItemIds(markers: readonly ItemMarker[], timelineLength: number): string[][] {
+  if (timelineLength <= 0) return [];
+
+  const markerByIndex = new Map<number, ItemMarker>();
+  for (const marker of markers) {
+    if (marker.index >= 0 && marker.index < timelineLength) {
+      markerByIndex.set(marker.index, marker);
+    }
+  }
+
+  const nearestLeft: Array<ItemMarker | undefined> = Array(timelineLength);
+  let leftMarker: ItemMarker | undefined;
+  for (let index = 0; index < timelineLength; index++) {
+    const marker = markerByIndex.get(index);
+    if (marker) leftMarker = marker;
+    nearestLeft[index] = leftMarker;
+  }
+
+  const nearestRight: Array<ItemMarker | undefined> = Array(timelineLength);
+  let rightMarker: ItemMarker | undefined;
+  for (let index = timelineLength - 1; index >= 0; index--) {
+    const marker = markerByIndex.get(index);
+    if (marker) rightMarker = marker;
+    nearestRight[index] = rightMarker;
+  }
+
+  return Array.from({ length: timelineLength }, (_, index) => {
+    const left = nearestLeft[index];
+    const right = nearestRight[index];
+    if (!left && !right) return [];
+    if (!left) return [right!.itemId];
+    if (!right) return [left.itemId];
+
+    const leftDistance = index - left.index;
+    const rightDistance = right.index - index;
+    if (leftDistance < rightDistance) return [left.itemId];
+    if (rightDistance < leftDistance) return [right.itemId];
+    return dedupeStrings([left.itemId, right.itemId]);
+  });
+}
+
 function buildTimelineSummary(timeline: TimelineEvent[]): ParseHistoryResult['summary'] {
   let transitions = 0;
   let yellowEvents = 0;
@@ -231,24 +277,9 @@ export function scopeTimelineToItem(
     };
   }
 
+  const nearestItemIdsByIndex = resolveNearestItemIds(markers, timeline.length);
   const bestSegment = timeline.filter((event, index) => {
-    let nearestDistance = Number.POSITIVE_INFINITY;
-    let nearestItemIds: string[] = [];
-
-    for (const marker of markers) {
-      const distance = Math.abs(marker.index - index);
-      if (distance < nearestDistance) {
-        nearestDistance = distance;
-        nearestItemIds = [marker.itemId];
-        continue;
-      }
-
-      if (distance === nearestDistance) {
-        nearestItemIds.push(marker.itemId);
-      }
-    }
-
-    const resolvedNearestItemIds = dedupeStrings(nearestItemIds);
+    const resolvedNearestItemIds = nearestItemIdsByIndex[index] || [];
     if (resolvedNearestItemIds.length !== 1) return false;
     return resolvedNearestItemIds[0] === normalizedItemId;
   });

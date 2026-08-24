@@ -159,7 +159,7 @@ describe('UnspscQuickFillApp', () => {
     quickInput.value = '27112104';
     quickInput.dispatchEvent(new Event('input', { bubbles: true }));
 
-    await flush(80);
+    await flush(180);
 
     expect(lookupSpy).toHaveBeenCalledTimes(1);
     expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('27112104. Drill bits');
@@ -276,6 +276,18 @@ describe('UnspscQuickFillApp', () => {
 
     expect(document.querySelectorAll('[data-km-unspsc-quick="1"]')).toHaveLength(1);
 
+    app.destroy();
+  });
+
+  it('settles after one external mutation instead of rescheduling itself forever', async () => {
+    const app = new UnspscQuickFillApp({ hookAspNet: false });
+    app.init();
+    const syncSpy = vi.spyOn(app, 'sync');
+
+    document.body.appendChild(document.createElement('div'));
+    await flush(220);
+
+    expect(syncSpy).toHaveBeenCalledTimes(1);
     app.destroy();
   });
 
