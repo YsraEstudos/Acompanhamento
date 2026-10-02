@@ -15,6 +15,16 @@ const USERSCRIPT = `// ==UserScript==
 // @version      ${VERSION}
 // @downloadURL  https://ysraestudos.github.io/Acompanhamento/releases/${VERSION}/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js
+// @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
+// @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
+// @match        https://klassmatt.com.br/*SIN_Item_Edita.aspx*
+// @match        https://klassmatt.com.br/*ITEM_Edita.aspx*
+// @connect      *.klassmatt.com.br
+// @connect      klassmatt.com.br
+// @grant        GM_registerMenuCommand
+// @grant        GM_unregisterMenuCommand
+// @grant        GM_xmlhttpRequest
+// @grant        unsafeWindow
 // ==/UserScript==
 
 console.log('ok');
@@ -76,5 +86,36 @@ describe('release artifact validation', () => {
     await fs.writeFile(latestPath, `${JSON.stringify(latest, null, 2)}\n`, 'utf8');
 
     await expect(validateReleaseArtifacts({ projectDir: rootDir })).rejects.toThrow(/downloadUrl/i);
+  });
+
+  it('validates a build that contains only the dist distribution', async () => {
+    const rootDir = await createFixture();
+    await fs.rm(path.join(rootDir, 'sin-inline.user.js'));
+    await fs.rm(path.join(rootDir, 'sin-inline.meta.js'));
+    await fs.rm(path.join(rootDir, 'latest.json'));
+    await fs.rm(path.join(rootDir, 'releases'), { recursive: true });
+
+    await expect(validateReleaseArtifacts({ projectDir: rootDir, location: 'dist' })).resolves.toEqual({
+      version: VERSION,
+      sha256: createHash('sha256').update(USERSCRIPT).digest('hex')
+    });
+  });
+
+  it('rejects a real artifact with a missing required metadata field', async () => {
+    const rootDir = await createFixture();
+    const scriptPath = path.join(rootDir, 'dist', 'sin-inline.user.js');
+    const script = await fs.readFile(scriptPath, 'utf8');
+    await fs.writeFile(scriptPath, script.replace('// @grant        unsafeWindow\n', ''), 'utf8');
+
+    await expect(validateReleaseArtifacts({ projectDir: rootDir, location: 'dist' })).rejects.toThrow(/grant/i);
+  });
+
+  it('rejects an unsafe metadata version before resolving a release path', async () => {
+    const rootDir = await createFixture();
+    const scriptPath = path.join(rootDir, 'dist', 'sin-inline.user.js');
+    const script = await fs.readFile(scriptPath, 'utf8');
+    await fs.writeFile(scriptPath, script.replace(`@version      ${VERSION}`, '@version      ../escape'), 'utf8');
+
+    await expect(validateReleaseArtifacts({ projectDir: rootDir, location: 'dist' })).rejects.toThrow(/version/i);
   });
 });

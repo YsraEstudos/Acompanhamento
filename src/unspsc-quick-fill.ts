@@ -1,3 +1,5 @@
+import { subscribeAspNetEndRequest } from './aspnet';
+
 const STYLE_ID = 'km-unspsc-quick-style';
 const QUICK_SELECTOR = '[data-km-unspsc-quick="1"]';
 const TOAST_SELECTOR = '[data-km-unspsc-toast="1"]';
@@ -18,11 +20,6 @@ const SELECTORS = {
   modalCancel: 'input[name$="$butCancelar"], input#butCancelar'
 } as const;
 
-interface PageRequestManagerLike {
-  add_endRequest(fn: () => void): void;
-  remove_endRequest(fn: () => void): void;
-}
-
 interface UnspscQuickFillOptions {
   hookAspNet?: boolean;
   timeoutMs?: number;
@@ -42,10 +39,10 @@ interface PendingUnspsc {
   stage: PendingStage;
 }
 
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
-
-function getPageWindow(): Window & typeof globalThis {
-  return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+class UnspscFlowError extends Error {
+  constructor(readonly code: 'NOT_FOUND' | 'TIMEOUT' | 'CANCELLED' | 'CONTROL_UNAVAILABLE') {
+    super('UNSPSC_' + code);
+  }
 }
 
 function isUsableElement(element: HTMLElement): boolean {
@@ -92,6 +89,63 @@ function markUnspscModal(modal: HTMLTableElement | null): void {
   if (modal) modal.dataset.kmUnspscModal = '1';
 }
 
+function observeUnspscChanges(onChange: () => void): () => void {
+  let disposed = false;
+  let scheduled = false;
+  let roots: Element[] = [];
+  const selector = Object.values(SELECTORS).join(', ');
+  const isOwned = (node: Node): boolean => {
+    const element = node instanceof Element ? node : node.parentElement;
+    return Boolean(element?.closest(OWNED_SELECTOR));
+  };
+  const notify = (): void => {
+    if (scheduled || disposed) return;
+    scheduled = true;
+    queueMicrotask(() => {
+      scheduled = false;
+      if (disposed) return;
+      bindLocalRoots();
+      onChange();
+    });
+  };
+  const local = new MutationObserver(records => {
+    if (records.some(record => !isOwned(record.target))) notify();
+  });
+  const bindLocalRoots = (): void => {
+    const value = findNativeUnspscElements()?.value;
+    const code = document.querySelector<HTMLInputElement>(SELECTORS.nativeCode);
+    const scope = (element: HTMLElement | null | undefined): Element | null => {
+      if (!element) return null;
+      const parent = element.closest('table') ?? element.parentElement;
+      return parent && parent !== document.body ? parent : element;
+    };
+    const next = [scope(value), scope(code), findUnspscModal()].filter((element): element is Element => Boolean(element));
+    if (roots.length === next.length && roots.every((root, index) => root === next[index])) return;
+    roots = next;
+    local.disconnect();
+    for (const root of roots) local.observe(root, {
+      childList: true, subtree: true, characterData: true,
+      attributes: true, attributeFilter: ['value', 'checked', 'class', 'style', 'hidden']
+    });
+  };
+  const replacements = new MutationObserver(records => {
+    const relevant = records.some(record => [...record.addedNodes, ...record.removedNodes].some(node => {
+      if (!(node instanceof Element) || isOwned(node)) return false;
+      return node.matches(selector) || Boolean(node.querySelector(selector));
+    }));
+    if (relevant) notify();
+  });
+  bindLocalRoots();
+  // Child replacements can occur outside the original container after postback.
+  // Broad attribute observation is limited to the local tables above.
+  replacements.observe(document.body ?? document.documentElement, { childList: true, subtree: true });
+  return () => {
+    disposed = true;
+    replacements.disconnect();
+    local.disconnect();
+  };
+}
+
 function hasNativeUnspscCodeInput(): boolean {
   return Array.from(document.querySelectorAll<HTMLInputElement>(SELECTORS.nativeCode))
     .some((input) => isUsableElement(input));
@@ -114,8 +168,10 @@ function readPendingUnspsc(): PendingUnspsc | null {
     const raw = sessionStorage.getItem(PENDING_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as Partial<PendingUnspsc>;
-    return parsed.code && parsed.code.length === 8 && parsed.stage
-      ? { code: parsed.code, stage: parsed.stage }
+    const stage = parsed.stage;
+    return typeof parsed.code === 'string' && /^\d{8}$/.test(parsed.code)
+      && (stage === 'opening' || stage === 'searching' || stage === 'selecting' || stage === 'closing')
+      ? { code: parsed.code, stage }
       : null;
   } catch {
     return null;
@@ -164,7 +220,8 @@ export class UnspscQuickFillApp {
   private readonly hookAspNet: boolean;
   private readonly timeoutMs: number;
   private readonly autoSubmitDelayMs: number;
-  private observer: MutationObserver | null = null;
+  private destroyDomObserver: (() => void) | null = null;
+  private readonly cancelWaits = new Set<() => void>();
   private destroyAspNet: (() => void) | null = null;
   private syncTimer = 0;
   private autoSubmitTimer = 0;
@@ -186,10 +243,11 @@ export class UnspscQuickFillApp {
   }
 
   init(): void {
+    if (this.destroyDomObserver) return;
     this.injectStyles();
     this.sync();
     this.bindMutationObserver();
-    if (this.hookAspNet) this.destroyAspNet = this.bindAspNetEndRequest();
+    if (this.hookAspNet) this.destroyAspNet = subscribeAspNetEndRequest(() => this.scheduleSync());
     void this.resumePending();
   }
 
@@ -198,12 +256,13 @@ export class UnspscQuickFillApp {
     this.running = false;
     if (this.syncTimer) window.clearTimeout(this.syncTimer);
     if (this.autoSubmitTimer) window.clearTimeout(this.autoSubmitTimer);
-    this.observer?.disconnect();
+    for (const cancel of [...this.cancelWaits]) cancel();
+    this.destroyDomObserver?.();
     this.destroyAspNet?.();
     this.removeHost();
     this.toast?.remove();
     document.body?.classList.remove('km-unspsc-running');
-    this.observer = null;
+    this.destroyDomObserver = null;
     this.destroyAspNet = null;
     this.toast = null;
   }
@@ -316,229 +375,165 @@ export class UnspscQuickFillApp {
     void this.startFill(code);
   };
 
-  private async startFill(code: string): Promise<void> {
-    if (this.running || code.length !== 8) return;
+  private beginOperation(code: string, message: string): number {
+    this.running = true;
+    this.activeCode = code;
+    document.body.classList.add('km-unspsc-running');
+    this.setState(message, 'busy');
+    return ++this.serial;
+  }
 
+  private async startFill(code: string): Promise<void> {
+    if (this.running || !/^\d{8}$/.test(code)) return;
     const native = findNativeUnspscElements();
     if (!native) {
       this.setState('Abra a aba Classificações e tente novamente.', 'error');
       return;
     }
-
     if (extractCurrentCode(native.value.value) === code) {
       this.setState('UNSPSC já preenchida.', 'success');
       return;
     }
-
-    const serial = ++this.serial;
-    this.running = true;
-    this.activeCode = code;
+    const serial = this.beginOperation(code, 'Abrindo consulta UNSPSC...');
     writePendingUnspsc({ code, stage: 'opening' });
-    document.body.classList.add('km-unspsc-running');
-    this.setState('Abrindo consulta UNSPSC...', 'busy');
-
-    try {
-      const previousModal = findUnspscModal();
-      native.lookup.click();
-      await this.waitForCondition(() => {
-        const modal = findUnspscModal();
-        return Boolean(modal && modal !== previousModal);
-      }, serial);
-      markUnspscModal(findUnspscModal());
-
-      const modalCode = this.requireInput(SELECTORS.modalCode);
-      const search = this.requireInput(SELECTORS.modalSearch);
-      setInputValue(modalCode, code);
-      this.setState('Pesquisando código UNSPSC...', 'busy');
-      writePendingUnspsc({ code, stage: 'searching' });
-
-      const previousResults = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalResults) ?? null;
-      const previousResultsHtml = previousResults?.innerHTML || '';
-      search.click();
-      await this.waitForCondition(() => {
-        const results = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalResults);
-        return Boolean(
-          results
-          && (results !== previousResults || results.innerHTML !== previousResultsHtml)
-        );
-      }, serial);
-
-      const resultSelector = findExactResult(code);
-      if (!resultSelector) throw new Error('UNSPSC_NOT_FOUND');
-
-      this.setState('Selecionando classificação...', 'busy');
-      writePendingUnspsc({ code, stage: 'selecting' });
-      const previousGrid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid) ?? null;
-      const previousGridHtml = previousGrid?.outerHTML || '';
-      resultSelector.click();
-      await this.waitForCondition(() => {
-        const grid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid);
-        return !resultSelector.isConnected || grid !== previousGrid || grid?.outerHTML !== previousGridHtml;
-      }, serial);
-
-      const close = this.requireInput(SELECTORS.modalClose);
-      this.setState('Aplicando UNSPSC ao item...', 'busy');
-      writePendingUnspsc({ code, stage: 'closing' });
-      close.click();
-      await this.waitForCondition(() => !findUnspscModal(), serial);
-      await this.waitForCondition(() => {
-        const current = findNativeUnspscElements();
-        return Boolean(current && extractCurrentCode(current.value.value) === code);
-      }, serial);
-
-      this.running = false;
-      this.activeCode = '';
-      clearPendingUnspsc();
-      document.body.classList.remove('km-unspsc-running');
-      this.sync();
-      this.setState('UNSPSC preenchida.', 'success');
-    } catch (error) {
-      if (serial !== this.serial) return;
-      await this.cancelModal(serial);
-      this.running = false;
-      this.activeCode = '';
-      clearPendingUnspsc();
-      document.body.classList.remove('km-unspsc-running');
-      this.sync();
-      this.setState(
-        error instanceof Error && error.message === 'UNSPSC_NOT_FOUND'
-          ? 'Código UNSPSC não encontrado.'
-          : 'Falha na consulta. Use a lupa.',
-        'error'
-      );
-    }
+    await this.executeFill(code, 'opening', serial, native.lookup);
   }
 
   private async resumePending(): Promise<void> {
     const pending = readPendingUnspsc();
-    if (!pending || this.running) return;
+    if (!pending || this.running || !findNativeUnspscElements()) return;
+    const modal = findUnspscModal();
+    if (!modal && pending.stage !== 'closing') return;
+    const serial = this.beginOperation(pending.code, 'Retomando consulta UNSPSC...');
+    await this.executeFill(pending.code, pending.stage, serial);
+  }
 
-    const native = findNativeUnspscElements();
-    if (!native) return;
-
-    const currentModal = findUnspscModal();
-    if (!currentModal) {
-      if (pending.stage === 'closing' && extractCurrentCode(native.value.value) === pending.code) {
-        clearPendingUnspsc();
-        this.setState('UNSPSC preenchida.', 'success');
-      }
-      return;
-    }
-
-    const serial = ++this.serial;
-    this.running = true;
-    this.activeCode = pending.code;
-    document.body.classList.add('km-unspsc-running');
-    markUnspscModal(currentModal);
-    this.setState('Retomando consulta UNSPSC...', 'busy');
-
+  private async executeFill(code: string, stage: PendingStage, serial: number, lookup?: HTMLInputElement): Promise<void> {
+    let message = 'UNSPSC preenchida.';
+    let tone: StatusTone = 'success';
     try {
-      if (pending.stage === 'selecting' || pending.stage === 'closing') {
-        const close = this.requireInput(SELECTORS.modalClose);
-        writePendingUnspsc({ code: pending.code, stage: 'closing' });
-        close.click();
-        await this.waitForCondition(() => !findUnspscModal(), serial);
-      } else {
-        let grid = pending.stage === 'searching'
-          ? currentModal.querySelector<HTMLElement>(SELECTORS.modalGrid)
-          : null;
-        if (!grid) {
-          const modalCode = this.requireInput(SELECTORS.modalCode);
-          const search = this.requireInput(SELECTORS.modalSearch);
-          const previousResults = currentModal.querySelector<HTMLElement>(SELECTORS.modalResults);
-          const previousResultsHtml = previousResults?.innerHTML || '';
-          setInputValue(modalCode, pending.code);
-          writePendingUnspsc({ code: pending.code, stage: 'searching' });
-          search.click();
-          await this.waitForCondition(() => {
-            const results = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalResults);
-            return Boolean(
-              results
-              && results.querySelector(SELECTORS.modalGrid)
-              && (results !== previousResults || results.innerHTML !== previousResultsHtml)
-            );
-          }, serial);
-          grid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid) ?? null;
-        }
-
-        const resultSelector = findExactResult(pending.code);
-        if (!grid || !resultSelector) throw new Error('UNSPSC_NOT_FOUND');
-
-        writePendingUnspsc({ code: pending.code, stage: 'selecting' });
-        resultSelector.click();
+      if (lookup) {
+        const previousModal = findUnspscModal();
+        lookup.click();
         await this.waitForCondition(() => {
-          const nextGrid = findUnspscModal()?.querySelector<HTMLElement>(SELECTORS.modalGrid);
-          return !resultSelector.isConnected || nextGrid !== grid || nextGrid?.outerHTML !== grid.outerHTML;
+          const modal = findUnspscModal();
+          return Boolean(modal && modal !== previousModal);
         }, serial);
-
-        const close = this.requireInput(SELECTORS.modalClose);
-        writePendingUnspsc({ code: pending.code, stage: 'closing' });
-        close.click();
+      }
+      this.assertActive(serial);
+      markUnspscModal(findUnspscModal());
+      if (stage === 'opening' || stage === 'searching') {
+        const modal = findUnspscModal();
+        const existingResults = stage === 'searching'
+          && modal?.querySelector<HTMLInputElement>(SELECTORS.modalCode)?.value === code
+          && modal.querySelector(SELECTORS.modalGrid);
+        if (!existingResults) await this.searchCode(code, serial);
+        await this.selectCode(code, serial);
+      }
+      this.assertActive(serial);
+      if (findUnspscModal()) {
+        this.setState('Aplicando UNSPSC ao item...', 'busy');
+        writePendingUnspsc({ code, stage: 'closing' });
+        this.requireInput(SELECTORS.modalClose).click();
         await this.waitForCondition(() => !findUnspscModal(), serial);
       }
-
-      const updated = findNativeUnspscElements();
-      if (updated && extractCurrentCode(updated.value.value) === pending.code) {
+      // Native postbacks can assign the property after removing the modal,
+      // without emitting a DOM mutation or an input event.
+      await this.waitForCondition(() => {
+        const native = findNativeUnspscElements();
+        return Boolean(native && extractCurrentCode(native.value.value) === code);
+      }, serial, 100);
+    } catch (error) {
+      if (serial !== this.serial) return;
+      await this.cancelModal(serial);
+      message = error instanceof UnspscFlowError && error.code === 'NOT_FOUND'
+        ? 'Código UNSPSC não encontrado.' : 'Falha na consulta. Use a lupa.';
+      tone = 'error';
+    } finally {
+      if (serial === this.serial) {
         clearPendingUnspsc();
         this.running = false;
         this.activeCode = '';
         document.body.classList.remove('km-unspsc-running');
         this.sync();
-        this.setState('UNSPSC preenchida.', 'success');
+        this.setState(message, tone);
       }
-    } catch (error) {
-      if (serial !== this.serial) return;
-      await this.cancelModal(serial);
-      clearPendingUnspsc();
-      this.running = false;
-      this.activeCode = '';
-      document.body.classList.remove('km-unspsc-running');
-      this.sync();
-      this.setState(
-        error instanceof Error && error.message === 'UNSPSC_NOT_FOUND'
-          ? 'Código UNSPSC não encontrado.'
-          : 'Falha na consulta. Use a lupa.',
-        'error'
-      );
     }
+  }
+
+  private async searchCode(code: string, serial: number): Promise<void> {
+    this.assertActive(serial);
+    const modalCode = this.requireInput(SELECTORS.modalCode);
+    const search = this.requireInput(SELECTORS.modalSearch);
+    setInputValue(modalCode, code);
+    this.setState('Pesquisando código UNSPSC...', 'busy');
+    writePendingUnspsc({ code, stage: 'searching' });
+    const previous = findUnspscModal()?.querySelector(SELECTORS.modalResults);
+    const child = previous?.firstElementChild;
+    const text = previous?.textContent;
+    search.click();
+    await this.waitForCondition(() => {
+      const results = findUnspscModal()?.querySelector(SELECTORS.modalResults);
+      return Boolean(results && (results !== previous || results.firstElementChild !== child || results.textContent !== text));
+    }, serial);
+  }
+
+  private async selectCode(code: string, serial: number): Promise<void> {
+    this.assertActive(serial);
+    const selector = findExactResult(code);
+    if (!selector) throw new UnspscFlowError('NOT_FOUND');
+    this.setState('Selecionando classificação...', 'busy');
+    writePendingUnspsc({ code, stage: 'selecting' });
+    const previous = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
+    const child = previous?.firstElementChild;
+    const text = previous?.textContent;
+    const checked = selector.checked;
+    selector.click();
+    await this.waitForCondition(() => {
+      const grid = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
+      return !selector.isConnected || grid !== previous || grid?.firstElementChild !== child
+        || grid?.textContent !== text || selector.checked !== checked;
+    }, serial);
+  }
+
+  private assertActive(serial: number): void {
+    if (serial !== this.serial) throw new UnspscFlowError('CANCELLED');
   }
 
   private requireInput(selector: string): HTMLInputElement {
     const input = findUnspscModal()?.querySelector<HTMLInputElement>(selector);
-    if (!input) throw new Error(`Controle UNSPSC indisponível: ${selector}`);
+    if (!input) throw new UnspscFlowError('CONTROL_UNAVAILABLE');
     return input;
   }
 
-  private waitForCondition(condition: () => boolean, serial: number): Promise<void> {
+  private waitForCondition(condition: () => boolean, serial: number, pollMs = 0): Promise<void> {
+    this.assertActive(serial);
     if (condition()) return Promise.resolve();
-
     return new Promise((resolve, reject) => {
       let settled = false;
-      const root = document.body ?? document.documentElement;
-      const timerHost = root.ownerDocument?.defaultView ?? window;
-
-      const finish = (error?: Error): void => {
+      let stopObserving = (): void => {};
+      let interval = 0;
+      let timeout = 0;
+      const finish = (error?: UnspscFlowError): void => {
         if (settled) return;
         settled = true;
-        observer.disconnect();
-        timerHost.clearInterval(interval);
-        timerHost.clearTimeout(timeout);
+        stopObserving();
+        if (interval) window.clearInterval(interval);
+        window.clearTimeout(timeout);
+        this.cancelWaits.delete(cancel);
         if (error) reject(error);
         else resolve();
       };
-
+      const cancel = (): void => finish(new UnspscFlowError('CANCELLED'));
       const check = (): void => {
-        if (serial !== this.serial) {
-          finish(new Error('UNSPSC_CANCELLED'));
-          return;
-        }
-        if (condition()) finish();
+        if (serial !== this.serial) cancel();
+        else if (condition()) finish();
       };
-
-      const observer = new MutationObserver(check);
-      observer.observe(root, { childList: true, subtree: true, attributes: true });
-      const interval = timerHost.setInterval(check, 50);
-      const timeout = timerHost.setTimeout(() => finish(new Error('UNSPSC_TIMEOUT')), this.timeoutMs);
+      this.cancelWaits.add(cancel);
+      stopObserving = observeUnspscChanges(check);
+      if (pollMs) interval = window.setInterval(check, pollMs);
+      timeout = window.setTimeout(() => finish(new UnspscFlowError('TIMEOUT')), this.timeoutMs);
+      check();
     });
   }
 
@@ -613,61 +608,12 @@ export class UnspscQuickFillApp {
     this.syncTimer = window.setTimeout(() => {
       this.syncTimer = 0;
       this.sync();
+      void this.resumePending();
     }, 60);
   }
 
   private bindMutationObserver(): void {
-    const root = document.body ?? document.documentElement;
-    this.observer = new MutationObserver((records) => {
-      const hasExternalMutation = records.some((record) => {
-        const target = record.target instanceof Element
-          ? record.target
-          : record.target.parentElement;
-        if (target?.closest(OWNED_SELECTOR)) return false;
-
-        const changedNodes = [...record.addedNodes, ...record.removedNodes];
-        return changedNodes.length === 0 || changedNodes.some((node) => {
-          if (!(node instanceof Element)) return true;
-          return !node.matches(OWNED_SELECTOR) && !node.querySelector(OWNED_SELECTOR);
-        });
-      });
-
-      if (hasExternalMutation) this.scheduleSync();
-    });
-    this.observer.observe(root, { childList: true, subtree: true });
-  }
-
-  private bindAspNetEndRequest(): () => void {
-    let disposed = false;
-    let intervalId = 0;
-    let manager: PageRequestManagerLike | null = null;
-    const handler = (): void => this.scheduleSync();
-    const deadline = Date.now() + 8000;
-
-    intervalId = window.setInterval(() => {
-      if (disposed || Date.now() > deadline) {
-        window.clearInterval(intervalId);
-        return;
-      }
-
-      const maybeManager = (getPageWindow() as any).Sys?.WebForms?.PageRequestManager?.getInstance?.() as PageRequestManagerLike | null | undefined;
-      if (!maybeManager) return;
-
-      window.clearInterval(intervalId);
-      manager = maybeManager;
-      manager.add_endRequest(handler);
-    }, 250);
-
-    return () => {
-      disposed = true;
-      if (intervalId) window.clearInterval(intervalId);
-      if (!manager) return;
-      try {
-        manager.remove_endRequest(handler);
-      } catch {
-        // Ignore teardown races during full page navigation.
-      }
-    };
+    this.destroyDomObserver = observeUnspscChanges(() => this.scheduleSync());
   }
 
   private injectStyles(): void {

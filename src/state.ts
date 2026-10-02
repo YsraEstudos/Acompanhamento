@@ -14,6 +14,11 @@ const DEFAULT_SETTINGS: SinPanelSettings = {
   timelineMode: 'yellow-only'
 };
 
+// Unsaved preferences last only for this page session. A newer persisted value
+// (for example, from another tab) takes precedence over this fallback.
+let unsavedSettings: SinPanelSettings | null = null;
+let storedBeforeFailure: string | null | undefined;
+
 function normalizeTimelineMode(value: unknown): TimelineMode {
   return value === 'yellow-only' ? 'yellow-only' : 'all';
 }
@@ -39,6 +44,10 @@ function parseStoredSettings(raw: string): SinPanelSettings {
 export function loadSettings(): SinPanelSettings {
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
+    if (unsavedSettings && (storedBeforeFailure === undefined || raw === storedBeforeFailure)) {
+      return { ...unsavedSettings };
+    }
+    unsavedSettings = null;
     if (raw) return parseStoredSettings(raw);
 
     const legacyRaw = localStorage.getItem(LEGACY_SETTINGS_KEY);
@@ -51,13 +60,23 @@ export function loadSettings(): SinPanelSettings {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(migratedSettings));
     return migratedSettings;
   } catch {
-    return { ...DEFAULT_SETTINGS };
+    return { ...(unsavedSettings ?? DEFAULT_SETTINGS) };
   }
 }
 
-export function saveSettings(settings: SinPanelSettings): void {
-  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+export function saveSettings(settings: SinPanelSettings): boolean {
+  let persisted = false;
+  storedBeforeFailure = undefined;
+  try {
+    storedBeforeFailure = localStorage.getItem(SETTINGS_KEY);
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+    unsavedSettings = null;
+    persisted = true;
+  } catch {
+    unsavedSettings = { ...settings };
+  }
   globalThis.dispatchEvent(new CustomEvent<SinPanelSettings>(SETTINGS_CHANGED_EVENT, {
     detail: settings
   }));
+  return persisted;
 }

@@ -76,4 +76,36 @@ describe('main bootstrap', () => {
     expect(document.querySelector('#txtCodUNSPSC')).not.toBeNull();
     expect(document.querySelector('[data-km-unspsc-quick="1"]')).toBeNull();
   });
+
+  it('keeps the menu and panel usable when storage rejects preference writes', async () => {
+    document.body.innerHTML = readFixture('item.html');
+    vi.stubGlobal('fetch', vi.fn(async () => buildHistoryResponse(readFixture('hist-strict.html'))));
+    let nextMenuId = 0;
+    const registerMenu = vi.fn((_caption: string, _callback: () => void) => ++nextMenuId);
+    vi.stubGlobal('GM_registerMenuCommand', registerMenu);
+    vi.stubGlobal('GM_unregisterMenuCommand', vi.fn());
+    await import('../src/main');
+    await flush();
+    const write = vi.spyOn(localStorage, 'setItem').mockImplementation(() => {
+      throw new DOMException('Blocked', 'SecurityError');
+    });
+    try {
+      expect(document.querySelector('.km-sin-layout')).toBeNull();
+      registerMenu.mock.calls.at(-1)![1]();
+      await flush();
+      expect(registerMenu.mock.calls.at(-1)![0]).toBe('Desativar acompanhamento sempre visivel');
+      expect(document.querySelector('.km-sin-layout')).not.toBeNull();
+      expect(document.querySelector<HTMLElement>('.km-sin-aside')?.hidden).toBe(false);
+      document.querySelector<HTMLButtonElement>('[data-role="mode"]')!.click();
+      expect(document.querySelector<HTMLElement>('[data-role="mode"]')?.dataset.mode).toBe('all');
+      registerMenu.mock.calls.at(-1)![1]();
+      await flush();
+      expect(registerMenu.mock.calls.at(-1)![0]).toBe('Ativar acompanhamento sempre visivel');
+      expect(document.querySelector<HTMLElement>('.km-sin-aside')?.hidden).toBe(true);
+      expect(localStorage.getItem('km_sin_sidebar_settings_v2')).toBeNull();
+    } finally {
+      write.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
 });

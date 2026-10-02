@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         KM Acompanhamento
 // @namespace    http://tampermonkey.net/
-// @version      1.0.23
+// @version      1.0.24
 // @author       Ysrael Xavier
 // @description  Exibe o KM Acompanhamento inline e agiliza o preenchimento UNSPSC no Klassmatt.
-// @downloadURL  https://ysraestudos.github.io/Acompanhamento/releases/1.0.23/sin-inline.user.js
+// @downloadURL  https://ysraestudos.github.io/Acompanhamento/releases/1.0.24/sin-inline.user.js
 // @updateURL    https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js
 // @match        https://*.klassmatt.com.br/*SIN_Item_Edita.aspx*
 // @match        https://*.klassmatt.com.br/*ITEM_Edita.aspx*
@@ -21,6 +21,50 @@
 
 (function() {
 	"use strict";
+	var HTTP_ERROR_CODES = {
+		HTTP_STATUS: "HTTP_STATUS",
+		CONTENT_TYPE: "CONTENT_TYPE",
+		ORIGIN_BLOCKED: "ORIGIN_BLOCKED",
+		NETWORK: "NETWORK",
+		TIMEOUT: "TIMEOUT",
+		ABORTED: "ABORTED",
+		UNKNOWN: "UNKNOWN"
+	};
+	var HttpRequestError = class extends Error {
+		code;
+		status;
+		contentType;
+		origin;
+		constructor(code, message, options = {}) {
+			super(message, { cause: options.cause });
+			this.name = options.name || "HttpRequestError";
+			this.code = code;
+			this.status = options.status;
+			this.contentType = options.contentType;
+			this.origin = options.origin;
+			Object.setPrototypeOf(this, new.target.prototype);
+		}
+	};
+	function hasProperty(value, property) {
+		return typeof value === "object" && value !== null && property in value;
+	}
+	function getHttpErrorCode(error) {
+		if (!hasProperty(error, "code")) return void 0;
+		const code = error.code;
+		return typeof code === "string" && Object.values(HTTP_ERROR_CODES).includes(code) ? code : void 0;
+	}
+	function getHttpErrorStatus(error) {
+		if (!hasProperty(error, "status")) return void 0;
+		return typeof error.status === "number" ? error.status : void 0;
+	}
+	function getHttpErrorName(error) {
+		if (!hasProperty(error, "name")) return void 0;
+		return typeof error.name === "string" ? error.name : void 0;
+	}
+	function createUnknownHttpError(cause) {
+		return new HttpRequestError(HTTP_ERROR_CODES.UNKNOWN, "Falha ao buscar ou interpretar o historico.", { cause });
+	}
+	var HTTP_TIMEOUT_MS = 3e4;
 	function extractCharsetContentType(contentType = "") {
 		const match = String(contentType || "").match(/charset\s*=\s*["']?([^;"'\s]+)/i);
 		return match?.[1] ? match[1].trim().toLowerCase() : "";
@@ -112,8 +156,8 @@
 			errorId: null
 		};
 	}
-	function isAbortError$1(error) {
-		return error instanceof Error && error.name === "AbortError";
+	function isAbortError$2(error) {
+		return getHttpErrorName(error) === "AbortError";
 	}
 	function isHtmlContentType(contentType) {
 		if (!contentType) return true;
@@ -122,12 +166,14 @@
 	function resolveAbsoluteUrl(rawUrl, fallbackUrl) {
 		return new URL(rawUrl || fallbackUrl, fallbackUrl);
 	}
-	function isNetworkFetchError(error) {
-		if (!(error instanceof Error)) return false;
-		return /failed to fetch|networkerror|network request failed/i.test(error.message);
-	}
 	function getAbortError() {
-		return new DOMException("The operation was aborted.", "AbortError");
+		return new HttpRequestError(HTTP_ERROR_CODES.ABORTED, "The operation was aborted.", { name: "AbortError" });
+	}
+	function getTimeoutError() {
+		return new HttpRequestError(HTTP_ERROR_CODES.TIMEOUT, "Timeout ao carregar o historico.", { name: "TimeoutError" });
+	}
+	function getNetworkError(cause) {
+		return new HttpRequestError(HTTP_ERROR_CODES.NETWORK, "Falha de conexao com o servidor.", { cause });
 	}
 	function parseTampermonkeyHeaders(rawHeaders = "") {
 		const headers = new Headers();
@@ -139,8 +185,8 @@
 		return headers;
 	}
 	function fetchWithTampermonkey(requestedUrl, signal) {
-		if (typeof GM_xmlhttpRequest !== "function") return Promise.reject(new TypeError("Failed to fetch"));
-		if (signal?.aborted) return Promise.reject(getAbortError());
+		if (signal?.aborted) return Promise.reject(signal.reason ?? getAbortError());
+		if (typeof GM_xmlhttpRequest !== "function") return Promise.reject(getNetworkError());
 		return new Promise((resolve, reject) => {
 			let settled = false;
 			let request = null;
@@ -157,7 +203,7 @@
 			handleAbort = () => {
 				if (settled) return;
 				request?.abort();
-				settle(() => reject(getAbortError()));
+				settle(() => reject(signal?.reason ?? getAbortError()));
 			};
 			signal?.addEventListener("abort", handleAbort, { once: true });
 			try {
@@ -165,7 +211,7 @@
 					method: "GET",
 					url: requestedUrl.toString(),
 					responseType: "arraybuffer",
-					timeout: 3e4,
+					timeout: HTTP_TIMEOUT_MS,
 					onload: (response) => {
 						settle(() => {
 							try {
@@ -183,13 +229,13 @@
 							}
 						});
 					},
-					onerror: () => settle(() => reject(new TypeError("Failed to fetch"))),
-					ontimeout: () => settle(() => reject(new Error("Network timeout"))),
+					onerror: () => settle(() => reject(getNetworkError())),
+					ontimeout: () => settle(() => reject(getTimeoutError())),
 					onabort: () => settle(() => reject(getAbortError()))
 				});
 				if (signal?.aborted) handleAbort();
 			} catch (error) {
-				settle(() => reject(error));
+				settle(() => reject(error instanceof TypeError ? getNetworkError(error) : error));
 			}
 		});
 	}
@@ -206,32 +252,56 @@
 				wasRedirected: response.redirected
 			};
 		} catch (error) {
-			if (isAbortError$1(error)) throw error;
+			if (signal?.aborted) throw signal.reason;
+			if (isAbortError$2(error)) throw error;
 			const pageOrigin = new URL(window.location.href).origin;
-			if (!isNetworkFetchError(error) || requestedUrl.origin !== pageOrigin) throw error;
+			if (!(error instanceof TypeError)) throw error;
+			if (requestedUrl.origin !== pageOrigin) throw getNetworkError(error);
 			return fetchWithTampermonkey(requestedUrl, signal);
 		}
 	}
-	async function fetchHtml(url, signal) {
-		const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
+	async function readHtml(requestedUrl, signal) {
 		try {
 			const transport = await fetchResponse(requestedUrl, signal);
 			const response = transport.response;
-			if (!response.ok) throw new Error(`Falha HTTP ${response.status}`);
+			if (!response.ok) throw new HttpRequestError(HTTP_ERROR_CODES.HTTP_STATUS, `Falha HTTP ${response.status}`, { status: response.status });
 			const contentType = response.headers.get("content-type") || "";
-			if (!isHtmlContentType(contentType)) throw new Error(`Response inesperado: content-type ${contentType || "vazio"}`);
-			const html = decodeHttpText(await response.arrayBuffer(), contentType);
+			if (!isHtmlContentType(contentType)) throw new HttpRequestError(HTTP_ERROR_CODES.CONTENT_TYPE, `Response inesperado: content-type ${contentType || "vazio"}`, { contentType });
 			const responseUrl = resolveAbsoluteUrl(transport.responseUrl || requestedUrl.toString(), requestedUrl.toString());
-			if (responseUrl.origin !== requestedUrl.origin) throw new Error(`Redirecionamento bloqueado para origem inesperada: ${responseUrl.origin}`);
+			if (responseUrl.origin !== requestedUrl.origin) throw new HttpRequestError(HTTP_ERROR_CODES.ORIGIN_BLOCKED, "Redirecionamento bloqueado para origem inesperada.", { origin: responseUrl.origin });
 			return {
-				html,
+				html: decodeHttpText(await response.arrayBuffer(), contentType),
 				responseUrl: responseUrl.toString(),
 				wasRedirected: transport.wasRedirected || responseUrl.toString() !== requestedUrl.toString(),
 				contentType
 			};
 		} catch (error) {
-			if (isAbortError$1(error)) throw error;
-			throw error instanceof Error ? error : new Error(String(error));
+			if (isAbortError$2(error)) throw error;
+			if (error instanceof TypeError) throw getNetworkError(error);
+			throw error instanceof Error ? error : createUnknownHttpError(error);
+		}
+	}
+	async function fetchHtml(url, signal) {
+		if (signal?.aborted) throw getAbortError();
+		const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
+		const controller = new AbortController();
+		let rejectDeadline;
+		const deadline = new Promise((_, reject) => {
+			rejectDeadline = reject;
+		});
+		const cancel = (error) => {
+			if (controller.signal.aborted) return;
+			rejectDeadline(error);
+			controller.abort(error);
+		};
+		const handleAbort = () => cancel(getAbortError());
+		const timeout = window.setTimeout(() => cancel(getTimeoutError()), HTTP_TIMEOUT_MS);
+		signal?.addEventListener("abort", handleAbort, { once: true });
+		try {
+			return await Promise.race([readHtml(requestedUrl, controller.signal), deadline]);
+		} finally {
+			window.clearTimeout(timeout);
+			signal?.removeEventListener("abort", handleAbort);
 		}
 	}
 	function normalizeSpaces(value) {
@@ -2096,6 +2166,276 @@
 	function parseHistoryStrict(doc, baseUrl = window.location.href) {
 		return finalizeParse(doc, parseHistoryStrictBuild(doc), baseUrl);
 	}
+	var MAX_HISTORY_CACHE_ENTRIES = 5;
+	function isAbortError$1(error) {
+		return getHttpErrorName(error) === "AbortError";
+	}
+	function getSafeHistoryUrl$1(rawUrl) {
+		return extractHistoryIdentityFromUrl(rawUrl)?.absoluteUrl || null;
+	}
+	function buildBlockedDiagnostic(title, reasons, expectedIdentity, actualIdentity) {
+		return [
+			title,
+			...reasons,
+			expectedIdentity ? `Esperado: ${formatHistoryIdentity(expectedIdentity)}.` : "",
+			actualIdentity ? `Retornado: ${formatHistoryIdentity(actualIdentity)}.` : ""
+		].filter(Boolean).join(" ");
+	}
+	function classifyErrorForUser(error, wasRedirected = false) {
+		const code = getHttpErrorCode(error);
+		const name = getHttpErrorName(error);
+		const status = getHttpErrorStatus(error);
+		if (code === HTTP_ERROR_CODES.HTTP_STATUS || status !== void 0) {
+			if (status === 401 || status === 403) return {
+				diagnostic: "O Klassmatt recusou o acesso ao historico.",
+				actionHint: "Recarregue a pagina (F5) para renovar a sessao."
+			};
+			if (status !== void 0 && status >= 500 && status <= 599) return {
+				diagnostic: "O servidor do Klassmatt retornou um erro interno.",
+				actionHint: "Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar."
+			};
+		}
+		if (code === HTTP_ERROR_CODES.NETWORK) return {
+			diagnostic: "Falha de conexao com o servidor.",
+			actionHint: "Verifique sua rede e, depois, reabra o painel ou recarregue a pagina (F5)."
+		};
+		if (code === HTTP_ERROR_CODES.TIMEOUT || !code && name === "TimeoutError") return {
+			diagnostic: "O servidor demorou demais para responder.",
+			actionHint: "Feche e abra o painel novamente para tentar de novo."
+		};
+		if (code === HTTP_ERROR_CODES.CONTENT_TYPE) return {
+			diagnostic: "O servidor retornou um conteudo inesperado (nao HTML).",
+			actionHint: "Use o botao Ver inline para abrir uma visualizacao segura do historico."
+		};
+		if (code === HTTP_ERROR_CODES.ORIGIN_BLOCKED) return {
+			diagnostic: "O carregamento foi bloqueado porque o servidor tentou responder por uma origem inesperada.",
+			actionHint: "Recarregue a pagina (F5) e confirme se o link nativo do historico ainda aponta para o Klassmatt."
+		};
+		if (wasRedirected) return {
+			diagnostic: "O Klassmatt redirecionou a solicitacao para outra pagina.",
+			actionHint: "A sessao pode ter expirado. Recarregue a pagina (F5)."
+		};
+		return {
+			diagnostic: "Falha ao buscar ou interpretar o historico.",
+			actionHint: "Feche e abra o painel novamente para tentar de novo."
+		};
+	}
+	var HistoryRepository = class {
+		cache = new Map();
+		inflight = new Map();
+		activeFetch = null;
+		activeFetchKey = null;
+		async get(context, force = false) {
+			const historyUrl = getSafeHistoryUrl$1(context.historyUrl);
+			if (!historyUrl) return {
+				mode: "blocked",
+				timeline: [],
+				diagnostic: "O link do historico aponta para uma origem inesperada ou nao confiavel.",
+				actionHint: "Recarregue a pagina (F5) e confirme que o link nativo da SIN esta correto."
+			};
+			const cacheKey = this.getHistoryCacheKey(context);
+			if (force) {
+				this.cache.delete(cacheKey);
+				this.purgeStaleCacheEntries(context.itemId, cacheKey);
+			}
+			if (!force) {
+				const cached = this.cache.get(cacheKey);
+				if (cached) {
+					this.cache.delete(cacheKey);
+					this.cache.set(cacheKey, cached);
+					return cached;
+				}
+			}
+			if (!force && this.inflight.has(cacheKey)) return this.inflight.get(cacheKey).task;
+			if (this.activeFetch && (force || this.activeFetchKey !== cacheKey)) this.abort();
+			const controller = new AbortController();
+			this.activeFetch = controller;
+			this.activeFetchKey = cacheKey;
+			const task = (async () => {
+				try {
+					const fetchResult = await fetchHtml(historyUrl, controller.signal);
+					if (fetchResult.wasRedirected && !/Historico\.aspx/i.test(fetchResult.responseUrl)) {
+						this.cache.delete(cacheKey);
+						return {
+							mode: "session-error",
+							timeline: [],
+							diagnostic: /Erro\.aspx|Login\.aspx|default\.aspx/i.test(fetchResult.responseUrl) ? "O Klassmatt redirecionou para uma pagina de erro ou login." : "O servidor redirecionou para uma pagina inesperada.",
+							actionHint: "A sessao pode ter expirado. Recarregue a pagina (F5)."
+						};
+					}
+					const doc = new DOMParser().parseFromString(fetchResult.html, "text/html");
+					const errorCheck = detectKlassmattErrorPage(doc);
+					if (errorCheck.isError) {
+						this.cache.delete(cacheKey);
+						return {
+							mode: "session-error",
+							timeline: [],
+							diagnostic: /ACESSO\s+N[ÃA]O\s+AUTORIZADO/i.test(errorCheck.errorMessage || "") ? "Acesso nao autorizado ao historico." : "O Klassmatt retornou uma pagina de erro.",
+							actionHint: "Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar de novo."
+						};
+					}
+					const parsed = parseHistoryStrict(doc, fetchResult.responseUrl);
+					const inlineBaseUrl = fetchResult.responseUrl || historyUrl;
+					const identityValidation = validateHistoryIdentity(context.historyIdentity, parsed.documentIdentity);
+					if (!identityValidation.isValid) return {
+						mode: "blocked",
+						timeline: [],
+						diagnostic: buildBlockedDiagnostic("Historico bloqueado por divergencia entre o link nativo e o HTML retornado.", identityValidation.reasons, context.historyIdentity, parsed.documentIdentity || null),
+						actionHint: "Use o botao Ver inline para conferir a pagina nativa.",
+						summary: parsed.summary,
+						warnings: [...identityValidation.reasons, ...parsed.warnings],
+						confidence: "low",
+						documentIdentity: parsed.documentIdentity,
+						inlineHtml: fetchResult.html,
+						inlineBaseUrl
+					};
+					if (parsed.confidence !== "high") return {
+						mode: "blocked",
+						timeline: [],
+						diagnostic: buildBlockedDiagnostic("Historico bloqueado por baixa confianca do parser estrito.", parsed.warnings, context.historyIdentity, parsed.documentIdentity || null),
+						actionHint: "O formato do historico pode ter mudado. Use o botao Ver inline.",
+						summary: parsed.summary,
+						warnings: parsed.warnings,
+						confidence: parsed.confidence,
+						documentIdentity: parsed.documentIdentity,
+						inlineHtml: fetchResult.html,
+						inlineBaseUrl
+					};
+					const scopedTimeline = context.itemId ? scopeTimelineToItem(parsed.timeline, context.itemId) : null;
+					if (scopedTimeline?.status === "ambiguous") return {
+						mode: "blocked",
+						timeline: [],
+						diagnostic: scopedTimeline.diagnostic || "O historico nao pode ser associado com seguranca ao item atual.",
+						actionHint: "Use o botao Ver inline para conferir o historico completo da SIN.",
+						summary: parsed.summary,
+						warnings: [...parsed.warnings, scopedTimeline.diagnostic || ""],
+						confidence: "low",
+						documentIdentity: parsed.documentIdentity,
+						inlineHtml: fetchResult.html,
+						inlineBaseUrl
+					};
+					const effectiveTimeline = scopedTimeline?.status === "filtered" ? scopedTimeline.timeline : parsed.timeline;
+					const effectiveSummary = scopedTimeline?.status === "filtered" ? scopedTimeline.summary : parsed.summary;
+					const effectiveDiagnostic = scopedTimeline?.status === "filtered" ? scopedTimeline.diagnostic : void 0;
+					const result = effectiveTimeline.length > 0 ? {
+						mode: "parsed",
+						timeline: effectiveTimeline,
+						diagnostic: effectiveDiagnostic,
+						summary: effectiveSummary,
+						warnings: parsed.warnings,
+						confidence: parsed.confidence,
+						documentIdentity: parsed.documentIdentity,
+						inlineHtml: fetchResult.html,
+						inlineBaseUrl
+					} : {
+						mode: "empty",
+						timeline: [],
+						diagnostic: "O popup foi carregado, mas nao continha eventos reconheciveis.",
+						actionHint: "Use o botao Ver inline para verificar.",
+						summary: effectiveSummary,
+						warnings: parsed.warnings,
+						confidence: parsed.confidence,
+						documentIdentity: parsed.documentIdentity,
+						inlineHtml: fetchResult.html,
+						inlineBaseUrl
+					};
+					this.setCachedHistory(cacheKey, result);
+					this.purgeStaleCacheEntries(context.itemId, cacheKey);
+					return result;
+				} catch (error) {
+					if (isAbortError$1(error)) throw error;
+					if (getHttpErrorCode(error) === HTTP_ERROR_CODES.ORIGIN_BLOCKED) {
+						const classified = classifyErrorForUser(error);
+						return {
+							mode: "blocked",
+							timeline: [],
+							diagnostic: classified.diagnostic,
+							actionHint: classified.actionHint
+						};
+					}
+					const classified = classifyErrorForUser(error);
+					return {
+						mode: historyUrl ? "iframe" : "error",
+						timeline: [],
+						diagnostic: classified.diagnostic,
+						actionHint: classified.actionHint
+					};
+				} finally {
+					if (this.activeFetch === controller) {
+						this.activeFetch = null;
+						this.activeFetchKey = null;
+					}
+					if (this.inflight.get(cacheKey)?.controller === controller) this.inflight.delete(cacheKey);
+				}
+			})();
+			this.inflight.set(cacheKey, {
+				controller,
+				task
+			});
+			return task;
+		}
+		abort() {
+			if (this.activeFetch) this.activeFetch.abort();
+			this.activeFetch = null;
+			this.activeFetchKey = null;
+		}
+		getHistoryCacheKey(context) {
+			return [context.itemId || "sem-item", context.historyIdentity?.fingerprint || context.historyUrl || "sem-historico"].join("|");
+		}
+		setCachedHistory(cacheKey, result) {
+			this.cache.delete(cacheKey);
+			this.cache.set(cacheKey, result);
+			while (this.cache.size > MAX_HISTORY_CACHE_ENTRIES) {
+				const oldestKey = this.cache.keys().next().value;
+				if (oldestKey === void 0) break;
+				this.cache.delete(oldestKey);
+			}
+		}
+		purgeStaleCacheEntries(itemId, keepKey) {
+			if (!itemId) return;
+			const prefix = `${itemId}|`;
+			for (const key of this.cache.keys()) if (key.startsWith(prefix) && key !== keepKey) this.cache.delete(key);
+		}
+	};
+	var subscribers = new Set();
+	var manager = null;
+	var discoveryTimer = 0;
+	var notify = () => {
+		for (const subscriber of [...subscribers]) if (subscribers.has(subscriber)) subscriber();
+	};
+	function stopDiscovery() {
+		if (discoveryTimer) window.clearInterval(discoveryTimer);
+		discoveryTimer = 0;
+	}
+	function subscribeAspNetEndRequest(handler) {
+		const subscriber = () => handler();
+		subscribers.add(subscriber);
+		if (!manager && !discoveryTimer) {
+			const deadline = Date.now() + 8e3;
+			discoveryTimer = window.setInterval(() => {
+				if (Date.now() > deadline) {
+					stopDiscovery();
+					return;
+				}
+				const discovered = (typeof unsafeWindow !== "undefined" ? unsafeWindow : window).Sys?.WebForms?.PageRequestManager?.getInstance?.();
+				if (!discovered) return;
+				manager = discovered;
+				stopDiscovery();
+				manager.add_endRequest(notify);
+			}, 250);
+		}
+		return () => {
+			subscribers.delete(subscriber);
+			if (subscribers.size > 0) return;
+			stopDiscovery();
+			if (manager) {
+				try {
+					manager.remove_endRequest(notify);
+				} catch {}
+				manager = null;
+			}
+		};
+	}
 	var SETTINGS_KEY = "km_sin_sidebar_settings_v2";
 	var LEGACY_SETTINGS_KEY = "km_sin_sidebar_settings_v1";
 	var SETTINGS_CHANGED_EVENT = "km-sin-sidebar-settings-changed";
@@ -2103,6 +2443,8 @@
 		alwaysOpen: false,
 		timelineMode: "yellow-only"
 	};
+	var unsavedSettings = null;
+	var storedBeforeFailure;
 	function normalizeTimelineMode(value) {
 		return value === "yellow-only" ? "yellow-only" : "all";
 	}
@@ -2122,6 +2464,8 @@
 	function loadSettings() {
 		try {
 			const raw = localStorage.getItem(SETTINGS_KEY);
+			if (unsavedSettings && (storedBeforeFailure === void 0 || raw === storedBeforeFailure)) return { ...unsavedSettings };
+			unsavedSettings = null;
 			if (raw) return parseStoredSettings(raw);
 			const legacyRaw = localStorage.getItem(LEGACY_SETTINGS_KEY);
 			if (!legacyRaw) return { ...DEFAULT_SETTINGS };
@@ -2132,13 +2476,349 @@
 			localStorage.setItem(SETTINGS_KEY, JSON.stringify(migratedSettings));
 			return migratedSettings;
 		} catch {
-			return { ...DEFAULT_SETTINGS };
+			return { ...unsavedSettings ?? DEFAULT_SETTINGS };
 		}
 	}
 	function saveSettings(settings) {
-		localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+		let persisted = false;
+		storedBeforeFailure = void 0;
+		try {
+			storedBeforeFailure = localStorage.getItem(SETTINGS_KEY);
+			localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+			unsavedSettings = null;
+			persisted = true;
+		} catch {
+			unsavedSettings = { ...settings };
+		}
 		globalThis.dispatchEvent(new CustomEvent(SETTINGS_CHANGED_EVENT, { detail: settings }));
+		return persisted;
 	}
+	function isElementVisible(element) {
+		if (!(element instanceof HTMLElement)) return false;
+		if (element.hidden) return false;
+		const style = (element.getAttribute("style") || "").toLowerCase();
+		if (/\bdisplay\s*:\s*none\b/.test(style)) return false;
+		if (/\bvisibility\s*:\s*hidden\b/.test(style)) return false;
+		return true;
+	}
+	function getCandidateScore(element, extras = {}) {
+		let score = 0;
+		if (isElementVisible(element)) score += 100;
+		if (extras.hasLink) score += 30;
+		if (extras.hasSummaryLabel) score += 20;
+		if (element.closest(".km-sin-main")) score += 10;
+		return score;
+	}
+	function pickBestElement(candidates, scorer) {
+		let best = null;
+		let bestScore = Number.NEGATIVE_INFINITY;
+		candidates.forEach((candidate, index) => {
+			const score = scorer(candidate) + index / 1e3;
+			if (score >= bestScore) {
+				best = candidate;
+				bestScore = score;
+			}
+		});
+		return best;
+	}
+	function getSearchParamInsensitive(url, name) {
+		const expected = name.toLowerCase();
+		for (const [key, value] of url.searchParams.entries()) {
+			if (key.toLowerCase() !== expected) continue;
+			return normalizeSpaces(value) || null;
+		}
+		return null;
+	}
+	function withNativeSecurityToken(url) {
+		const absoluteUrl = absolutizeUrl(url);
+		if (!absoluteUrl) return null;
+		try {
+			const resolved = new URL(absoluteUrl);
+			if (resolved.searchParams.has("k")) return resolved.toString();
+			const currentToken = getSearchParamInsensitive(new URL(window.location.href), "k");
+			if (!currentToken) return resolved.toString();
+			resolved.searchParams.set("k", currentToken);
+			return resolved.toString();
+		} catch {
+			return absoluteUrl;
+		}
+	}
+	function getCurrentLocationHints() {
+		try {
+			const url = new URL(window.location.href);
+			return {
+				itemId: getSearchParamInsensitive(url, "IdItem"),
+				sinId: getSearchParamInsensitive(url, "IdSIN")
+			};
+		} catch {
+			return {
+				itemId: null,
+				sinId: null
+			};
+		}
+	}
+	function absolutizeUrl(url) {
+		try {
+			return new URL(String(url ?? ""), window.location.href).toString();
+		} catch {
+			return null;
+		}
+	}
+	function extractUrlFromJsFunction(href, functionNames) {
+		const raw = String(href ?? "");
+		if (!raw) return null;
+		for (const name of functionNames) {
+			const matcher = new RegExp(`${name}\\s*\\(\\s*['"]([^'"]+)['"]`, "i");
+			const match = raw.match(matcher);
+			if (match?.[1]) return absolutizeUrl(match[1]);
+		}
+		const genericOpen = raw.match(/open[\w]*\s*\(\s*['"]([^'"]+)['"]/i);
+		if (genericOpen?.[1]) return absolutizeUrl(genericOpen[1]);
+		return null;
+	}
+	function extractHistoryUrlFromHref(href) {
+		return withNativeSecurityToken(extractUrlFromJsFunction(href, [
+			"OpenWindowsWHR",
+			"OpenWindowsWHRNS",
+			"OpenNewTab"
+		]));
+	}
+	function extractHistoryIdentityFromHref(href) {
+		return extractHistoryIdentityFromUrl(extractHistoryUrlFromHref(href));
+	}
+	function findHistoryLink(root) {
+		const direct = pickBestElement(Array.from(root.querySelectorAll("#hButAcompanhamentoSIN, #hlkObs")), (anchor) => getCandidateScore(anchor, { hasLink: true }));
+		if (direct) return direct;
+		const namedCandidates = [];
+		for (const anchor of root.querySelectorAll("a")) if (normalizeTextNoAccent(anchor.textContent).includes("acompanhamento")) namedCandidates.push(anchor);
+		return pickBestElement(namedCandidates, (anchor) => getCandidateScore(anchor, { hasLink: true }));
+	}
+	function extractItemId(root) {
+		const fromField = pickBestElement(Array.from(root.querySelectorAll("#txtNumero, input[name$=\"txtNumero\"]")), (input) => getCandidateScore(input));
+		return fromField?.value ? normalizeSpaces(fromField.value) : null;
+	}
+	function extractSinIdFromSummary(summaryEl) {
+		if (!summaryEl) return null;
+		const infoMatch = (summaryEl.querySelector("#Label_infoSIN")?.textContent || "").match(/\bSIN:\s*(\d+)/i);
+		return infoMatch?.[1] ? infoMatch[1] : null;
+	}
+	function findPrimaryItemField() {
+		const locationHints = getCurrentLocationHints();
+		return pickBestElement(Array.from(document.querySelectorAll("#txtNumero, input[name$=\"txtNumero\"]")), (input) => {
+			let score = getCandidateScore(input);
+			const value = normalizeSpaces(input.value);
+			if (value) score += 20;
+			if (locationHints.itemId && value === locationHints.itemId) score += 40;
+			return score;
+		});
+	}
+	function findBestViewRoot() {
+		const locationHints = getCurrentLocationHints();
+		const primaryItemField = findPrimaryItemField();
+		return pickBestElement(Array.from(document.querySelectorAll("#UpdatePanel1 .kl-view, .kl-view")), (element) => getCandidateScore(element, {
+			hasLink: Boolean(element.querySelector("#hButAcompanhamentoSIN, #hlkObs")),
+			hasSummaryLabel: Boolean(element.querySelector("#Label_infoSIN"))
+		}) + (() => {
+			let bonus = 0;
+			const rootItemId = extractItemId(element);
+			const rootSummarySinId = extractSinIdFromSummary(element.querySelector("#DV_Resumo_sin"));
+			if (primaryItemField && element.contains(primaryItemField)) bonus += 80;
+			if (rootItemId) bonus += 12;
+			if (rootSummarySinId) bonus += 8;
+			if (locationHints.itemId && rootItemId && rootItemId === locationHints.itemId) bonus += 40;
+			if (locationHints.sinId && rootSummarySinId && rootSummarySinId === locationHints.sinId) bonus += 25;
+			return bonus;
+		})());
+	}
+	function findBestSummary(scope) {
+		return pickBestElement(Array.from(scope.querySelectorAll("#DV_Resumo_sin")), (element) => getCandidateScore(element, {
+			hasLink: Boolean(findHistoryLink(element)),
+			hasSummaryLabel: Boolean(element.querySelector("#Label_infoSIN"))
+		}));
+	}
+	function findQuickViewRoot() {
+		return findBestViewRoot();
+	}
+	function findQuickSummary(scope) {
+		return findBestSummary(scope);
+	}
+	function findDirectHistoryLink(root) {
+		return findHistoryLink(root);
+	}
+	function resolvePageContext() {
+		const viewRoot = findBestViewRoot();
+		const scope = viewRoot ?? document;
+		const summaryEl = findBestSummary(scope);
+		const linkEl = summaryEl ? findHistoryLink(summaryEl) || findHistoryLink(scope) : findHistoryLink(scope);
+		const itemId = extractItemId(scope);
+		const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute("href")) : null;
+		const directUrl = historyIdentity?.absoluteUrl || null;
+		const sinIdFromLink = historyIdentity?.id || null;
+		const sinIdFromSummary = extractSinIdFromSummary(summaryEl);
+		const sinId = sinIdFromLink || sinIdFromSummary || null;
+		const hasTrustedLink = Boolean(linkEl && historyIdentity?.absoluteUrl && historyIdentity?.id);
+		const isStable = Boolean(viewRoot && summaryEl && hasTrustedLink && Boolean(sinIdFromLink || sinIdFromSummary) && (!sinIdFromLink || !sinIdFromSummary || sinIdFromLink === sinIdFromSummary));
+		return {
+			itemId,
+			historyUrl: isStable ? directUrl : null,
+			historyIdentity,
+			sinId,
+			summarySinId: sinIdFromSummary,
+			isStable,
+			viewRoot,
+			summaryEl,
+			linkEl
+		};
+	}
+	function resolveQuickPageContext() {
+		const viewRoot = findQuickViewRoot();
+		const scope = viewRoot ?? document;
+		const summaryEl = findQuickSummary(scope);
+		const linkEl = summaryEl ? findDirectHistoryLink(summaryEl) || findDirectHistoryLink(scope) : findDirectHistoryLink(scope);
+		const itemId = extractItemId(scope);
+		const summarySinId = extractSinIdFromSummary(summaryEl);
+		const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute("href")) : null;
+		return {
+			itemId,
+			historyUrl: historyIdentity?.absoluteUrl || null,
+			historyIdentity,
+			sinId: historyIdentity?.id || summarySinId,
+			summarySinId,
+			viewRoot,
+			summaryEl,
+			linkEl
+		};
+	}
+	var CONTEXT_MUTATION_SELECTOR = [
+		"#UpdatePanel1",
+		".kl-view",
+		"#DV_Resumo_sin",
+		"#Label_infoSIN",
+		"#hButAcompanhamentoSIN",
+		"#hlkObs",
+		"#txtNumero"
+	].join(", ");
+	var OWN_UI_MUTATION_SELECTOR = [
+		".km-sin-layout",
+		".km-sin-inline-toggle",
+		"[data-km-unspsc-quick=\"1\"]",
+		"[data-km-unspsc-toast=\"1\"]",
+		"#km-sin-sidebar-style",
+		"#km-unspsc-quick-style"
+	].join(", ");
+	function getMutationElement(node) {
+		if (node.nodeType === 1) return node;
+		return node.parentElement;
+	}
+	function isOwnedUiNode(node) {
+		const element = getMutationElement(node);
+		return Boolean(element?.matches(OWN_UI_MUTATION_SELECTOR) || element?.closest(OWN_UI_MUTATION_SELECTOR));
+	}
+	function nodeTouchesContext(node) {
+		const element = getMutationElement(node);
+		return Boolean(element?.matches(CONTEXT_MUTATION_SELECTOR) || element?.closest(CONTEXT_MUTATION_SELECTOR) || element?.querySelector(CONTEXT_MUTATION_SELECTOR));
+	}
+	function hasRelevantContextMutation(records) {
+		return records.some((record) => {
+			const target = getMutationElement(record.target);
+			if (target?.closest(OWN_UI_MUTATION_SELECTOR)) return false;
+			if (target?.matches(CONTEXT_MUTATION_SELECTOR) || target?.closest(CONTEXT_MUTATION_SELECTOR)) return true;
+			return [...record.addedNodes, ...record.removedNodes].some((node) => {
+				if (isOwnedUiNode(node)) return false;
+				return nodeTouchesContext(node);
+			});
+		});
+	}
+	var PageLifecycle = class {
+		options;
+		destroyAspNet = null;
+		destroyContextEvents = null;
+		observedContextSignature = null;
+		constructor(options) {
+			this.options = options;
+		}
+		start() {
+			if (this.destroyContextEvents) return;
+			this.destroyContextEvents = this.bindContextEvents();
+			if (this.options.hookAspNet ?? true) this.destroyAspNet = subscribeAspNetEndRequest(this.handlePageLifecycleEvent);
+		}
+		destroy() {
+			this.destroyAspNet?.();
+			this.destroyContextEvents?.();
+			this.destroyAspNet = null;
+			this.destroyContextEvents = null;
+		}
+		handleStorageEvent = (event) => {
+			const storageEvent = event;
+			if (storageEvent.key !== null && storageEvent.key !== "km_sin_sidebar_settings_v2") return;
+			this.options.onSettingsChange();
+		};
+		handleSettingsChanged = () => this.options.onSettingsChange();
+		handlePageLifecycleEvent = (event) => {
+			if (event?.type === "pageshow" && !event.persisted) return;
+			const context = resolveQuickPageContext();
+			this.observedContextSignature = this.captureContextSignature(context);
+			this.options.onContextChange(context);
+		};
+		captureContextSignature(context = resolveQuickPageContext()) {
+			return [
+				window.location.href,
+				context.itemId || "sem-item",
+				context.summarySinId || "sem-sin-resumo",
+				context.historyIdentity?.fingerprint || context.historyUrl || context.sinId || "sem-historico"
+			].join("|");
+		}
+		bindContextEvents() {
+			let disposed = false;
+			let mutationObserver = null;
+			let mutationTimer = 0;
+			const observeRoot = document.body ?? document.documentElement;
+			const timerHost = observeRoot.ownerDocument?.defaultView ?? window;
+			const handleMutation = () => {
+				if (disposed) return;
+				mutationTimer = 0;
+				const nextSignature = this.captureContextSignature();
+				if (nextSignature === this.observedContextSignature) return;
+				this.observedContextSignature = nextSignature;
+				this.handlePageLifecycleEvent();
+			};
+			window.addEventListener("storage", this.handleStorageEvent);
+			globalThis.addEventListener(SETTINGS_CHANGED_EVENT, this.handleSettingsChanged);
+			window.addEventListener("pageshow", this.handlePageLifecycleEvent);
+			window.addEventListener("popstate", this.handlePageLifecycleEvent);
+			window.addEventListener("hashchange", this.handlePageLifecycleEvent);
+			if (observeRoot) {
+				this.observedContextSignature = this.captureContextSignature();
+				mutationObserver = new MutationObserver((records) => {
+					if (!hasRelevantContextMutation(records) || mutationTimer) return;
+					mutationTimer = timerHost.setTimeout(handleMutation, 80);
+				});
+				mutationObserver.observe(observeRoot, {
+					childList: true,
+					subtree: true,
+					characterData: true,
+					attributes: true,
+					attributeFilter: [
+						"href",
+						"value",
+						"style",
+						"class",
+						"hidden"
+					]
+				});
+			}
+			return () => {
+				disposed = true;
+				if (mutationTimer) timerHost.clearTimeout(mutationTimer);
+				mutationObserver?.disconnect();
+				window.removeEventListener("storage", this.handleStorageEvent);
+				globalThis.removeEventListener(SETTINGS_CHANGED_EVENT, this.handleSettingsChanged);
+				window.removeEventListener("pageshow", this.handlePageLifecycleEvent);
+				window.removeEventListener("popstate", this.handlePageLifecycleEvent);
+				window.removeEventListener("hashchange", this.handlePageLifecycleEvent);
+			};
+		}
+	};
 	var INLINE_PASSTHROUGH_TAGS = new Set([
 		"B",
 		"STRONG",
@@ -2598,315 +3278,18 @@
 		fragment.appendChild(iframe);
 		shell.bodyEl.replaceChildren(fragment);
 	}
-	function isElementVisible(element) {
-		if (!(element instanceof HTMLElement)) return false;
-		if (element.hidden) return false;
-		const style = (element.getAttribute("style") || "").toLowerCase();
-		if (/\bdisplay\s*:\s*none\b/.test(style)) return false;
-		if (/\bvisibility\s*:\s*hidden\b/.test(style)) return false;
-		return true;
-	}
-	function getCandidateScore(element, extras = {}) {
-		let score = 0;
-		if (isElementVisible(element)) score += 100;
-		if (extras.hasLink) score += 30;
-		if (extras.hasSummaryLabel) score += 20;
-		if (element.closest(".km-sin-main")) score += 10;
-		return score;
-	}
-	function pickBestElement(candidates, scorer) {
-		let best = null;
-		let bestScore = Number.NEGATIVE_INFINITY;
-		candidates.forEach((candidate, index) => {
-			const score = scorer(candidate) + index / 1e3;
-			if (score >= bestScore) {
-				best = candidate;
-				bestScore = score;
-			}
-		});
-		return best;
-	}
-	function getSearchParamInsensitive(url, name) {
-		const expected = name.toLowerCase();
-		for (const [key, value] of url.searchParams.entries()) {
-			if (key.toLowerCase() !== expected) continue;
-			return normalizeSpaces(value) || null;
-		}
-		return null;
-	}
-	function withNativeSecurityToken(url) {
-		const absoluteUrl = absolutizeUrl(url);
-		if (!absoluteUrl) return null;
-		try {
-			const resolved = new URL(absoluteUrl);
-			if (resolved.searchParams.has("k")) return resolved.toString();
-			const currentToken = getSearchParamInsensitive(new URL(window.location.href), "k");
-			if (!currentToken) return resolved.toString();
-			resolved.searchParams.set("k", currentToken);
-			return resolved.toString();
-		} catch {
-			return absoluteUrl;
-		}
-	}
-	function getCurrentLocationHints() {
-		try {
-			const url = new URL(window.location.href);
-			return {
-				itemId: getSearchParamInsensitive(url, "IdItem"),
-				sinId: getSearchParamInsensitive(url, "IdSIN")
-			};
-		} catch {
-			return {
-				itemId: null,
-				sinId: null
-			};
-		}
-	}
-	function absolutizeUrl(url) {
-		try {
-			return new URL(String(url ?? ""), window.location.href).toString();
-		} catch {
-			return null;
-		}
-	}
-	function extractUrlFromJsFunction(href, functionNames) {
-		const raw = String(href ?? "");
-		if (!raw) return null;
-		for (const name of functionNames) {
-			const matcher = new RegExp(`${name}\\s*\\(\\s*['"]([^'"]+)['"]`, "i");
-			const match = raw.match(matcher);
-			if (match?.[1]) return absolutizeUrl(match[1]);
-		}
-		const genericOpen = raw.match(/open[\w]*\s*\(\s*['"]([^'"]+)['"]/i);
-		if (genericOpen?.[1]) return absolutizeUrl(genericOpen[1]);
-		return null;
-	}
-	function extractHistoryUrlFromHref(href) {
-		return withNativeSecurityToken(extractUrlFromJsFunction(href, [
-			"OpenWindowsWHR",
-			"OpenWindowsWHRNS",
-			"OpenNewTab"
-		]));
-	}
-	function extractHistoryIdentityFromHref(href) {
-		return extractHistoryIdentityFromUrl(extractHistoryUrlFromHref(href));
-	}
-	function findHistoryLink(root) {
-		const direct = pickBestElement(Array.from(root.querySelectorAll("#hButAcompanhamentoSIN, #hlkObs")), (anchor) => getCandidateScore(anchor, { hasLink: true }));
-		if (direct) return direct;
-		const namedCandidates = [];
-		for (const anchor of root.querySelectorAll("a")) if (normalizeTextNoAccent(anchor.textContent).includes("acompanhamento")) namedCandidates.push(anchor);
-		return pickBestElement(namedCandidates, (anchor) => getCandidateScore(anchor, { hasLink: true }));
-	}
-	function extractItemId(root) {
-		const fromField = pickBestElement(Array.from(root.querySelectorAll("#txtNumero, input[name$=\"txtNumero\"]")), (input) => getCandidateScore(input));
-		return fromField?.value ? normalizeSpaces(fromField.value) : null;
-	}
-	function extractSinIdFromSummary(summaryEl) {
-		if (!summaryEl) return null;
-		const infoMatch = (summaryEl.querySelector("#Label_infoSIN")?.textContent || "").match(/\bSIN:\s*(\d+)/i);
-		return infoMatch?.[1] ? infoMatch[1] : null;
-	}
-	function findPrimaryItemField() {
-		const locationHints = getCurrentLocationHints();
-		return pickBestElement(Array.from(document.querySelectorAll("#txtNumero, input[name$=\"txtNumero\"]")), (input) => {
-			let score = getCandidateScore(input);
-			const value = normalizeSpaces(input.value);
-			if (value) score += 20;
-			if (locationHints.itemId && value === locationHints.itemId) score += 40;
-			return score;
-		});
-	}
-	function findBestViewRoot() {
-		const locationHints = getCurrentLocationHints();
-		const primaryItemField = findPrimaryItemField();
-		return pickBestElement(Array.from(document.querySelectorAll("#UpdatePanel1 .kl-view, .kl-view")), (element) => getCandidateScore(element, {
-			hasLink: Boolean(element.querySelector("#hButAcompanhamentoSIN, #hlkObs")),
-			hasSummaryLabel: Boolean(element.querySelector("#Label_infoSIN"))
-		}) + (() => {
-			let bonus = 0;
-			const rootItemId = extractItemId(element);
-			const rootSummarySinId = extractSinIdFromSummary(element.querySelector("#DV_Resumo_sin"));
-			if (primaryItemField && element.contains(primaryItemField)) bonus += 80;
-			if (rootItemId) bonus += 12;
-			if (rootSummarySinId) bonus += 8;
-			if (locationHints.itemId && rootItemId && rootItemId === locationHints.itemId) bonus += 40;
-			if (locationHints.sinId && rootSummarySinId && rootSummarySinId === locationHints.sinId) bonus += 25;
-			return bonus;
-		})());
-	}
-	function findBestSummary(scope) {
-		return pickBestElement(Array.from(scope.querySelectorAll("#DV_Resumo_sin")), (element) => getCandidateScore(element, {
-			hasLink: Boolean(findHistoryLink(element)),
-			hasSummaryLabel: Boolean(element.querySelector("#Label_infoSIN"))
-		}));
-	}
-	function findQuickViewRoot() {
-		return findBestViewRoot();
-	}
-	function findQuickSummary(scope) {
-		return findBestSummary(scope);
-	}
-	function findDirectHistoryLink(root) {
-		return findHistoryLink(root);
-	}
-	function resolvePageContext() {
-		const viewRoot = findBestViewRoot();
-		const scope = viewRoot ?? document;
-		const summaryEl = findBestSummary(scope);
-		const linkEl = summaryEl ? findHistoryLink(summaryEl) || findHistoryLink(scope) : findHistoryLink(scope);
-		const itemId = extractItemId(scope);
-		const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute("href")) : null;
-		const directUrl = historyIdentity?.absoluteUrl || null;
-		const sinIdFromLink = historyIdentity?.id || null;
-		const sinIdFromSummary = extractSinIdFromSummary(summaryEl);
-		const sinId = sinIdFromLink || sinIdFromSummary || null;
-		const hasTrustedLink = Boolean(linkEl && historyIdentity?.absoluteUrl && historyIdentity?.id);
-		const isStable = Boolean(viewRoot && summaryEl && hasTrustedLink && Boolean(sinIdFromLink || sinIdFromSummary) && (!sinIdFromLink || !sinIdFromSummary || sinIdFromLink === sinIdFromSummary));
-		return {
-			itemId,
-			historyUrl: isStable ? directUrl : null,
-			historyIdentity,
-			sinId,
-			summarySinId: sinIdFromSummary,
-			isStable,
-			viewRoot,
-			summaryEl,
-			linkEl
-		};
-	}
-	function resolveQuickPageContext() {
-		const viewRoot = findQuickViewRoot();
-		const scope = viewRoot ?? document;
-		const summaryEl = findQuickSummary(scope);
-		const linkEl = summaryEl ? findDirectHistoryLink(summaryEl) || findDirectHistoryLink(scope) : findDirectHistoryLink(scope);
-		const itemId = extractItemId(scope);
-		const summarySinId = extractSinIdFromSummary(summaryEl);
-		const historyIdentity = linkEl ? extractHistoryIdentityFromHref(linkEl.getAttribute("href")) : null;
-		return {
-			itemId,
-			historyUrl: historyIdentity?.absoluteUrl || null,
-			historyIdentity,
-			sinId: historyIdentity?.id || summarySinId,
-			summarySinId,
-			viewRoot,
-			summaryEl,
-			linkEl
-		};
-	}
 	var RENDER_BATCH_SIZE = 30;
-	var MAX_HISTORY_CACHE_ENTRIES = 5;
-	var CONTEXT_MUTATION_SELECTOR = [
-		"#UpdatePanel1",
-		".kl-view",
-		"#DV_Resumo_sin",
-		"#Label_infoSIN",
-		"#hButAcompanhamentoSIN",
-		"#hlkObs",
-		"#txtNumero"
-	].join(", ");
-	var OWN_UI_MUTATION_SELECTOR = [
-		".km-sin-layout",
-		".km-sin-inline-toggle",
-		"[data-km-unspsc-quick=\"1\"]",
-		"[data-km-unspsc-toast=\"1\"]",
-		"#km-sin-sidebar-style",
-		"#km-unspsc-quick-style"
-	].join(", ");
-	function getMutationElement(node) {
-		if (node.nodeType === 1) return node;
-		return node.parentElement;
-	}
-	function isOwnedUiNode(node) {
-		const element = getMutationElement(node);
-		return Boolean(element?.matches(OWN_UI_MUTATION_SELECTOR) || element?.closest(OWN_UI_MUTATION_SELECTOR));
-	}
-	function nodeTouchesContext(node) {
-		const element = getMutationElement(node);
-		return Boolean(element?.matches(CONTEXT_MUTATION_SELECTOR) || element?.closest(CONTEXT_MUTATION_SELECTOR) || element?.querySelector(CONTEXT_MUTATION_SELECTOR));
-	}
-	function hasRelevantContextMutation(records) {
-		return records.some((record) => {
-			const target = getMutationElement(record.target);
-			if (target?.closest(OWN_UI_MUTATION_SELECTOR)) return false;
-			if (target?.matches(CONTEXT_MUTATION_SELECTOR) || target?.closest(CONTEXT_MUTATION_SELECTOR)) return true;
-			return [...record.addedNodes, ...record.removedNodes].some((node) => {
-				if (isOwnedUiNode(node)) return false;
-				return nodeTouchesContext(node);
-			});
-		});
-	}
-	function resolveRefreshMode(options) {
-		return options.refreshMode ?? "manual";
-	}
 	function isAbortError(error) {
-		return error instanceof Error && error.name === "AbortError";
-	}
-	function getPageWindow$1() {
-		return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
+		return (error instanceof Error || error instanceof DOMException) && error.name === "AbortError";
 	}
 	function getSafeHistoryUrl(rawUrl) {
 		return extractHistoryIdentityFromUrl(rawUrl)?.absoluteUrl || null;
 	}
-	function buildBlockedDiagnostic(title, reasons, expectedIdentity, actualIdentity) {
-		return [
-			title,
-			...reasons,
-			expectedIdentity ? `Esperado: ${formatHistoryIdentity(expectedIdentity)}.` : "",
-			actualIdentity ? `Retornado: ${formatHistoryIdentity(actualIdentity)}.` : ""
-		].filter(Boolean).join(" ");
-	}
-	function isSecurityBlockedError(error) {
-		if (!(error instanceof Error)) return false;
-		return /origem inesperada|redirecionamento bloqueado/i.test(error.message);
-	}
-	function classifyErrorForUser(error, wasRedirected) {
-		if (error instanceof Error) {
-			const msg = error.message.toLowerCase();
-			if (/falha http 401|falha http 403/i.test(msg)) return {
-				diagnostic: "O Klassmatt recusou o acesso ao historico.",
-				actionHint: "Recarregue a pagina (F5) para renovar a sessao."
-			};
-			if (/falha http 5\d\d/i.test(msg)) return {
-				diagnostic: "O servidor do Klassmatt retornou um erro interno.",
-				actionHint: "Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar."
-			};
-			if (/network|fetch|econnreset|econnrefused|socket/i.test(msg)) return {
-				diagnostic: "Falha de conexao com o servidor.",
-				actionHint: "Verifique sua rede e, depois, reabra o painel ou recarregue a pagina (F5)."
-			};
-			if (/timeout/i.test(msg)) return {
-				diagnostic: "O servidor demorou demais para responder.",
-				actionHint: "Feche e abra o painel novamente para tentar de novo."
-			};
-			if (/content-type/i.test(msg)) return {
-				diagnostic: "O servidor retornou um conteudo inesperado (nao HTML).",
-				actionHint: "Use o botao Ver inline para abrir uma visualizacao segura do historico."
-			};
-			if (/origem inesperada|redirecionamento bloqueado/i.test(msg)) return {
-				diagnostic: "O carregamento foi bloqueado porque o servidor tentou responder por uma origem inesperada.",
-				actionHint: "Recarregue a pagina (F5) e confirme se o link nativo do historico ainda aponta para o Klassmatt."
-			};
-		}
-		if (wasRedirected) return {
-			diagnostic: "O Klassmatt redirecionou a solicitacao para outra pagina.",
-			actionHint: "A sessao pode ter expirado. Recarregue a pagina (F5)."
-		};
-		return {
-			diagnostic: `Falha ao buscar ou interpretar o historico: ${error instanceof Error ? error.message : String(error)}`,
-			actionHint: "Feche e abra o painel novamente para tentar de novo."
-		};
-	}
 	var SinSidebarApp = class {
-		options;
-		cache = new Map();
-		inflight = new Map();
+		history = new HistoryRepository();
+		lifecycle;
 		settings = loadSettings();
-		destroyAspNet = null;
-		destroyContextEvents = null;
 		loadSerial = 0;
-		activeFetch = null;
-		activeFetchKey = null;
 		currentShell = null;
 		currentViewRoot = null;
 		currentContext = null;
@@ -2916,7 +3299,6 @@
 		inlinePanelOverride = null;
 		panelOpen = this.settings.alwaysOpen;
 		currentContextKey = null;
-		observedContextSignature = null;
 		toggleHost = null;
 		toggleButton = null;
 		toggleParent = null;
@@ -2947,7 +3329,7 @@
 			const shell = this.currentShell;
 			const safeHistoryUrl = getSafeHistoryUrl(context.historyUrl);
 			if (shell && safeHistoryUrl) {
-				this.abortActiveFetch();
+				this.history.abort();
 				setShellState(shell, "Exibindo visualizacao segura do historico...", "default");
 				renderIframeFallback(shell, safeHistoryUrl, void 0, this.latestResult?.inlineHtml, this.latestResult?.inlineBaseUrl);
 				return;
@@ -2965,18 +3347,11 @@
 			this.renderedCount = Math.min(this.renderedCount + RENDER_BATCH_SIZE, visibleTimeline.length);
 			this.renderStoredTimeline(shell, previousCount);
 		};
-		handleStorageEvent = (event) => {
-			const storageEvent = event;
-			if (storageEvent.key !== null && storageEvent.key !== "km_sin_sidebar_settings_v2") return;
+		handleSettingsChange = () => {
 			this.applySettings(loadSettings());
 		};
-		handlePageLifecycleEvent = (event) => {
-			if (event?.type === "pageshow") {
-				if (!event.persisted) return;
-			}
+		handleContextChange = (quickContext) => {
 			this.syncSettingsFromStorage();
-			const quickContext = resolveQuickPageContext();
-			this.observedContextSignature = this.captureContextSignature(quickContext);
 			this.syncContextScope(quickContext);
 			if (this.panelOpen) {
 				this.hydrate(true);
@@ -2985,15 +3360,15 @@
 			this.syncClosedState(quickContext);
 		};
 		constructor(options = {}) {
-			this.options = {
-				refreshMode: resolveRefreshMode(options),
-				hookAspNet: options.hookAspNet ?? true
-			};
+			this.lifecycle = new PageLifecycle({
+				hookAspNet: options.hookAspNet ?? true,
+				onContextChange: this.handleContextChange,
+				onSettingsChange: this.handleSettingsChange
+			});
 		}
 		init() {
 			injectStyles();
-			this.destroyContextEvents = this.bindContextEvents();
-			if (this.options.hookAspNet) this.destroyAspNet = this.bindAspNetEndRequest();
+			this.lifecycle.start();
 			if (this.panelOpen) {
 				this.hydrate(true);
 				return;
@@ -3006,9 +3381,8 @@
 			this.inlinePanelOverride = null;
 			this.currentContext = null;
 			this.currentContextKey = null;
-			if (this.destroyAspNet) this.destroyAspNet();
-			if (this.destroyContextEvents) this.destroyContextEvents();
-			this.abortActiveFetch();
+			this.lifecycle.destroy();
+			this.history.abort();
 			this.removeInlineToggle();
 			this.clearParsedState();
 		}
@@ -3068,7 +3442,7 @@
 			this.syncModeButton(shell);
 			this.setAsideVisible(shell, true);
 			if (!context.summaryEl) {
-				this.abortActiveFetch();
+				this.history.abort();
 				this.clearParsedState();
 				shell.inlineButton.disabled = true;
 				setShellMeta(shell, "Aguardando area de resumo da SIN");
@@ -3079,7 +3453,7 @@
 			const safeHistoryUrl = getSafeHistoryUrl(context.historyUrl);
 			shell.inlineButton.disabled = !Boolean(safeHistoryUrl);
 			if (!context.historyIdentity?.absoluteUrl) {
-				this.abortActiveFetch();
+				this.history.abort();
 				this.clearParsedState();
 				setShellMeta(shell, context.itemId ? `Item ${context.itemId} • aguardando link nativo` : "Aguardando link nativo do acompanhamento");
 				setShellState(shell, "Modo leve: sem link nativo confiavel.", "warning");
@@ -3087,7 +3461,7 @@
 				return;
 			}
 			if (!confirmedContext || !context.isStable) {
-				this.abortActiveFetch();
+				this.history.abort();
 				this.clearParsedState();
 				setShellMeta(shell, context.sinId ? `SIN ${context.sinId} • aguardando consistencia` : "Aguardando consistencia da SIN");
 				setShellState(shell, "O contexto ainda nao ficou consistente nesta atualizacao.", "warning");
@@ -3100,13 +3474,14 @@
 			renderEmpty(shell, "Buscando o conteudo de KM Acompanhamento...");
 			let result;
 			try {
-				result = await this.getHistoryResult(confirmedContext, force);
+				result = await this.history.get(confirmedContext, force);
 			} catch (error) {
 				if (serial !== this.loadSerial || isAbortError(error)) return;
 				result = {
 					mode: "error",
 					timeline: [],
-					diagnostic: `Falha ao buscar ou interpretar o historico: ${error instanceof Error ? error.message : String(error)}`
+					diagnostic: "Falha ao buscar ou interpretar o historico.",
+					actionHint: "Feche e abra o painel novamente para tentar de novo."
 				};
 			}
 			if (serial !== this.loadSerial || !this.panelOpen) return;
@@ -3115,13 +3490,12 @@
 		renderResult(shell, context, result) {
 			const safeHistoryUrl = getSafeHistoryUrl(context.historyUrl) || window.location.href;
 			this.latestResult = result;
-			if (result.mode === "parsed" && result.summary) {
-				const parsedResult = result;
+			if (result.mode === "parsed") {
 				this.latestParsed = {
-					allTimeline: parsedResult.timeline,
-					yellowTimeline: parsedResult.timeline.filter((event) => event.yellowComments.length > 0),
+					allTimeline: result.timeline,
+					yellowTimeline: result.timeline.filter((event) => event.yellowComments.length > 0),
 					historyUrl: safeHistoryUrl,
-					result: parsedResult
+					result
 				};
 				this.renderedCount = 0;
 				this.renderStoredTimeline(shell);
@@ -3181,151 +3555,6 @@
 			};
 			if (appendFrom === void 0) renderTimeline(shell, model);
 			else appendTimeline(shell, { ...model });
-		}
-		async getHistoryResult(context, force = false) {
-			const historyUrl = getSafeHistoryUrl(context.historyUrl);
-			if (!historyUrl) return {
-				mode: "blocked",
-				timeline: [],
-				diagnostic: "O link do historico aponta para uma origem inesperada ou nao confiavel.",
-				actionHint: "Recarregue a pagina (F5) e confirme que o link nativo da SIN esta correto."
-			};
-			const cacheKey = this.getHistoryCacheKey(context);
-			if (force) {
-				this.cache.delete(cacheKey);
-				this.purgeStaleCacheEntries(context.itemId, cacheKey);
-			}
-			if (!force) {
-				const cached = this.cache.get(cacheKey);
-				if (cached) {
-					this.cache.delete(cacheKey);
-					this.cache.set(cacheKey, cached);
-					return cached;
-				}
-			}
-			if (!force && this.inflight.has(cacheKey)) return this.inflight.get(cacheKey);
-			const task = (async () => {
-				try {
-					if (this.activeFetch && (force || this.activeFetchKey !== cacheKey)) this.abortActiveFetch();
-					this.activeFetch = new AbortController();
-					this.activeFetchKey = cacheKey;
-					const fetchResult = await fetchHtml(historyUrl, this.activeFetch.signal);
-					if (fetchResult.wasRedirected && !/Historico\.aspx/i.test(fetchResult.responseUrl)) {
-						this.cache.delete(cacheKey);
-						return {
-							mode: "session-error",
-							timeline: [],
-							diagnostic: /Erro\.aspx|Login\.aspx|default\.aspx/i.test(fetchResult.responseUrl) ? "O Klassmatt redirecionou para uma pagina de erro ou login." : `O servidor redirecionou para ${fetchResult.responseUrl}.`,
-							actionHint: "A sessao pode ter expirado. Recarregue a pagina (F5)."
-						};
-					}
-					const doc = new DOMParser().parseFromString(fetchResult.html, "text/html");
-					const errorCheck = detectKlassmattErrorPage(doc);
-					if (errorCheck.isError) {
-						this.cache.delete(cacheKey);
-						return {
-							mode: "session-error",
-							timeline: [],
-							diagnostic: /ACESSO\s+N[ÃA]O\s+AUTORIZADO/i.test(errorCheck.errorMessage || "") ? "Acesso nao autorizado ao historico." : `O Klassmatt retornou uma pagina de erro: ${(errorCheck.errorMessage || "Erro desconhecido").slice(0, 200)}`,
-							actionHint: "Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar de novo."
-						};
-					}
-					const parsed = parseHistoryStrict(doc, fetchResult.responseUrl);
-					const inlineBaseUrl = fetchResult.responseUrl || historyUrl;
-					const identityValidation = validateHistoryIdentity(context.historyIdentity, parsed.documentIdentity);
-					if (!identityValidation.isValid) return {
-						mode: "blocked",
-						timeline: [],
-						diagnostic: buildBlockedDiagnostic("Historico bloqueado por divergencia entre o link nativo e o HTML retornado.", identityValidation.reasons, context.historyIdentity, parsed.documentIdentity || null),
-						actionHint: "Use o botao Ver inline para conferir a pagina nativa.",
-						summary: parsed.summary,
-						warnings: [...identityValidation.reasons, ...parsed.warnings],
-						confidence: "low",
-						documentIdentity: parsed.documentIdentity,
-						inlineHtml: fetchResult.html,
-						inlineBaseUrl
-					};
-					if (parsed.confidence !== "high") return {
-						mode: "blocked",
-						timeline: [],
-						diagnostic: buildBlockedDiagnostic("Historico bloqueado por baixa confianca do parser estrito.", parsed.warnings, context.historyIdentity, parsed.documentIdentity || null),
-						actionHint: "O formato do historico pode ter mudado. Use o botao Ver inline.",
-						summary: parsed.summary,
-						warnings: parsed.warnings,
-						confidence: parsed.confidence,
-						documentIdentity: parsed.documentIdentity,
-						inlineHtml: fetchResult.html,
-						inlineBaseUrl
-					};
-					const scopedTimeline = context.itemId ? scopeTimelineToItem(parsed.timeline, context.itemId) : null;
-					if (scopedTimeline?.status === "ambiguous") return {
-						mode: "blocked",
-						timeline: [],
-						diagnostic: scopedTimeline.diagnostic,
-						actionHint: "Use o botao Ver inline para conferir o historico completo da SIN.",
-						summary: parsed.summary,
-						warnings: [...parsed.warnings, scopedTimeline.diagnostic || ""],
-						confidence: "low",
-						documentIdentity: parsed.documentIdentity,
-						inlineHtml: fetchResult.html,
-						inlineBaseUrl
-					};
-					const effectiveTimeline = scopedTimeline?.status === "filtered" ? scopedTimeline.timeline : parsed.timeline;
-					const effectiveSummary = scopedTimeline?.status === "filtered" ? scopedTimeline.summary : parsed.summary;
-					const effectiveDiagnostic = scopedTimeline?.status === "filtered" ? scopedTimeline.diagnostic : void 0;
-					const result = effectiveTimeline.length > 0 ? {
-						mode: "parsed",
-						timeline: effectiveTimeline,
-						diagnostic: effectiveDiagnostic,
-						summary: effectiveSummary,
-						warnings: parsed.warnings,
-						confidence: parsed.confidence,
-						documentIdentity: parsed.documentIdentity,
-						inlineHtml: fetchResult.html,
-						inlineBaseUrl
-					} : {
-						mode: "empty",
-						timeline: [],
-						diagnostic: "O popup foi carregado, mas nao continha eventos reconheciveis.",
-						actionHint: "Use o botao Ver inline para verificar.",
-						summary: effectiveSummary,
-						warnings: parsed.warnings,
-						confidence: parsed.confidence,
-						documentIdentity: parsed.documentIdentity,
-						inlineHtml: fetchResult.html,
-						inlineBaseUrl
-					};
-					this.setCachedHistory(cacheKey, result);
-					this.purgeStaleCacheEntries(context.itemId, cacheKey);
-					return result;
-				} catch (error) {
-					if (isAbortError(error)) throw error;
-					if (isSecurityBlockedError(error)) {
-						const classified = classifyErrorForUser(error);
-						return {
-							mode: "blocked",
-							timeline: [],
-							diagnostic: classified.diagnostic,
-							actionHint: classified.actionHint
-						};
-					}
-					const classified = classifyErrorForUser(error);
-					return {
-						mode: historyUrl ? "iframe" : "error",
-						timeline: [],
-						diagnostic: classified.diagnostic,
-						actionHint: classified.actionHint
-					};
-				} finally {
-					if (this.activeFetchKey === cacheKey) {
-						this.activeFetch = null;
-						this.activeFetchKey = null;
-					}
-					this.inflight.delete(cacheKey);
-				}
-			})();
-			this.inflight.set(cacheKey, task);
-			return task;
 		}
 		ensureCurrentShell(viewRoot) {
 			if (this.currentShell && this.currentViewRoot === viewRoot && this.currentShell.layoutEl.isConnected) return this.currentShell;
@@ -3405,19 +3634,6 @@
 			shell.asideEl.hidden = !visible;
 			shell.layoutEl.classList.toggle("km-sin-collapsed", !visible);
 		}
-		abortActiveFetch() {
-			if (this.activeFetch) this.activeFetch.abort();
-			this.activeFetch = null;
-			this.activeFetchKey = null;
-		}
-		captureContextSignature(context = resolveQuickPageContext()) {
-			return [
-				window.location.href,
-				context.itemId || "sem-item",
-				context.summarySinId || "sem-sin-resumo",
-				context.historyIdentity?.fingerprint || context.historyUrl || context.sinId || "sem-historico"
-			].join("|");
-		}
 		async confirmTrustedContext(context, serial) {
 			if (context.isStable && context.historyIdentity?.fingerprint) return context;
 			await new Promise((resolve) => {
@@ -3436,7 +3652,7 @@
 		closePanel() {
 			this.panelOpen = false;
 			this.loadSerial++;
-			this.abortActiveFetch();
+			this.history.abort();
 			this.clearParsedState();
 			this.currentContext = null;
 			this.hideCurrentSidebar(true);
@@ -3461,92 +3677,6 @@
 				this.currentContext = null;
 			}
 		}
-		bindContextEvents() {
-			let disposed = false;
-			let mutationObserver = null;
-			let mutationTimer = 0;
-			const observeRoot = document.body ?? document.documentElement;
-			const timerHost = observeRoot.ownerDocument?.defaultView ?? window;
-			const handleMutation = () => {
-				if (disposed) return;
-				mutationTimer = 0;
-				const nextSignature = this.captureContextSignature();
-				if (nextSignature === this.observedContextSignature) return;
-				this.observedContextSignature = nextSignature;
-				this.handlePageLifecycleEvent();
-			};
-			window.addEventListener("storage", this.handleStorageEvent);
-			window.addEventListener("pageshow", this.handlePageLifecycleEvent);
-			window.addEventListener("popstate", this.handlePageLifecycleEvent);
-			window.addEventListener("hashchange", this.handlePageLifecycleEvent);
-			if (observeRoot) {
-				this.observedContextSignature = this.captureContextSignature();
-				mutationObserver = new MutationObserver((records) => {
-					if (!hasRelevantContextMutation(records) || mutationTimer) return;
-					mutationTimer = timerHost.setTimeout(handleMutation, 80);
-				});
-				mutationObserver.observe(observeRoot, {
-					childList: true,
-					subtree: true,
-					characterData: true,
-					attributes: true,
-					attributeFilter: [
-						"href",
-						"value",
-						"style",
-						"class",
-						"hidden"
-					]
-				});
-			}
-			return () => {
-				disposed = true;
-				if (mutationTimer) timerHost.clearTimeout(mutationTimer);
-				mutationObserver?.disconnect();
-				window.removeEventListener("storage", this.handleStorageEvent);
-				window.removeEventListener("pageshow", this.handlePageLifecycleEvent);
-				window.removeEventListener("popstate", this.handlePageLifecycleEvent);
-				window.removeEventListener("hashchange", this.handlePageLifecycleEvent);
-			};
-		}
-		bindAspNetEndRequest() {
-			let disposed = false;
-			let intervalId = 0;
-			let handler = null;
-			let manager = null;
-			const deadline = Date.now() + 8e3;
-			intervalId = window.setInterval(() => {
-				if (disposed || Date.now() > deadline) {
-					window.clearInterval(intervalId);
-					return;
-				}
-				const maybeManager = getPageWindow$1().Sys?.WebForms?.PageRequestManager?.getInstance?.();
-				if (!maybeManager) return;
-				window.clearInterval(intervalId);
-				manager = maybeManager;
-				handler = this.handlePageLifecycleEvent;
-				manager.add_endRequest(handler);
-			}, 250);
-			return () => {
-				disposed = true;
-				if (intervalId) window.clearInterval(intervalId);
-				if (manager && handler) try {
-					manager.remove_endRequest(handler);
-				} catch {}
-			};
-		}
-		getHistoryCacheKey(context) {
-			return [context.itemId || "sem-item", context.historyIdentity?.fingerprint || context.historyUrl || "sem-historico"].join("|");
-		}
-		setCachedHistory(cacheKey, result) {
-			this.cache.delete(cacheKey);
-			this.cache.set(cacheKey, result);
-			while (this.cache.size > MAX_HISTORY_CACHE_ENTRIES) {
-				const oldestKey = this.cache.keys().next().value;
-				if (oldestKey === void 0) break;
-				this.cache.delete(oldestKey);
-			}
-		}
 		syncSettingsFromStorage() {
 			const storedSettings = loadSettings();
 			this.settings = storedSettings;
@@ -3568,11 +3698,6 @@
 			const totalYellowEvents = this.latestParsed.result.summary.totalYellowEvents;
 			if (loadedCount < totalVisible) return totalYellowEvents > 0 ? `Exibindo ${loadedCount} de ${totalEventos} evento(s) (${totalYellowEvents} com amarelo)` : `Exibindo ${loadedCount} de ${totalEventos} evento(s) da SIN`;
 			return totalYellowEvents > 0 ? `Exibindo ${totalEventos} evento(s) (${totalYellowEvents} com amarelo)` : `Exibindo todos os ${totalEventos} evento(s) da SIN`;
-		}
-		purgeStaleCacheEntries(itemId, keepKey) {
-			if (!itemId) return;
-			const prefix = `${itemId}|`;
-			for (const key of this.cache.keys()) if (key.startsWith(prefix) && key !== keepKey) this.cache.delete(key);
 		}
 	};
 	var SUPPORTED_ITEM_PATHS = [/\/SIN_Item_Edita\.aspx$/i, /\/ITEM_Edita\.aspx$/i];
@@ -3602,9 +3727,13 @@
 		modalClose: "input[name$=\"$butFechar\"], input#butFechar",
 		modalCancel: "input[name$=\"$butCancelar\"], input#butCancelar"
 	};
-	function getPageWindow() {
-		return typeof unsafeWindow !== "undefined" ? unsafeWindow : window;
-	}
+	var UnspscFlowError = class extends Error {
+		code;
+		constructor(code) {
+			super("UNSPSC_" + code);
+			this.code = code;
+		}
+	};
 	function isUsableElement(element) {
 		if (!element.isConnected || element.hidden) return false;
 		const style = (element.getAttribute("style") || "").toLowerCase();
@@ -3636,6 +3765,75 @@
 	function markUnspscModal(modal) {
 		if (modal) modal.dataset.kmUnspscModal = "1";
 	}
+	function observeUnspscChanges(onChange) {
+		let disposed = false;
+		let scheduled = false;
+		let roots = [];
+		const selector = Object.values(SELECTORS).join(", ");
+		const isOwned = (node) => {
+			const element = node instanceof Element ? node : node.parentElement;
+			return Boolean(element?.closest(OWNED_SELECTOR));
+		};
+		const notify = () => {
+			if (scheduled || disposed) return;
+			scheduled = true;
+			queueMicrotask(() => {
+				scheduled = false;
+				if (disposed) return;
+				bindLocalRoots();
+				onChange();
+			});
+		};
+		const local = new MutationObserver((records) => {
+			if (records.some((record) => !isOwned(record.target))) notify();
+		});
+		const bindLocalRoots = () => {
+			const value = findNativeUnspscElements()?.value;
+			const code = document.querySelector(SELECTORS.nativeCode);
+			const scope = (element) => {
+				if (!element) return null;
+				const parent = element.closest("table") ?? element.parentElement;
+				return parent && parent !== document.body ? parent : element;
+			};
+			const next = [
+				scope(value),
+				scope(code),
+				findUnspscModal()
+			].filter((element) => Boolean(element));
+			if (roots.length === next.length && roots.every((root, index) => root === next[index])) return;
+			roots = next;
+			local.disconnect();
+			for (const root of roots) local.observe(root, {
+				childList: true,
+				subtree: true,
+				characterData: true,
+				attributes: true,
+				attributeFilter: [
+					"value",
+					"checked",
+					"class",
+					"style",
+					"hidden"
+				]
+			});
+		};
+		const replacements = new MutationObserver((records) => {
+			if (records.some((record) => [...record.addedNodes, ...record.removedNodes].some((node) => {
+				if (!(node instanceof Element) || isOwned(node)) return false;
+				return node.matches(selector) || Boolean(node.querySelector(selector));
+			}))) notify();
+		});
+		bindLocalRoots();
+		replacements.observe(document.body ?? document.documentElement, {
+			childList: true,
+			subtree: true
+		});
+		return () => {
+			disposed = true;
+			replacements.disconnect();
+			local.disconnect();
+		};
+	}
 	function hasNativeUnspscCodeInput() {
 		return Array.from(document.querySelectorAll(SELECTORS.nativeCode)).some((input) => isUsableElement(input));
 	}
@@ -3654,9 +3852,10 @@
 			const raw = sessionStorage.getItem(PENDING_KEY);
 			if (!raw) return null;
 			const parsed = JSON.parse(raw);
-			return parsed.code && parsed.code.length === 8 && parsed.stage ? {
+			const stage = parsed.stage;
+			return typeof parsed.code === "string" && /^\d{8}$/.test(parsed.code) && (stage === "opening" || stage === "searching" || stage === "selecting" || stage === "closing") ? {
 				code: parsed.code,
-				stage: parsed.stage
+				stage
 			} : null;
 		} catch {
 			return null;
@@ -3689,7 +3888,8 @@
 		hookAspNet;
 		timeoutMs;
 		autoSubmitDelayMs;
-		observer = null;
+		destroyDomObserver = null;
+		cancelWaits = new Set();
 		destroyAspNet = null;
 		syncTimer = 0;
 		autoSubmitTimer = 0;
@@ -3709,10 +3909,11 @@
 			this.autoSubmitDelayMs = options.autoSubmitDelayMs ?? DEFAULT_AUTO_SUBMIT_DELAY_MS;
 		}
 		init() {
+			if (this.destroyDomObserver) return;
 			this.injectStyles();
 			this.sync();
 			this.bindMutationObserver();
-			if (this.hookAspNet) this.destroyAspNet = this.bindAspNetEndRequest();
+			if (this.hookAspNet) this.destroyAspNet = subscribeAspNetEndRequest(() => this.scheduleSync());
 			this.resumePending();
 		}
 		destroy() {
@@ -3720,12 +3921,13 @@
 			this.running = false;
 			if (this.syncTimer) window.clearTimeout(this.syncTimer);
 			if (this.autoSubmitTimer) window.clearTimeout(this.autoSubmitTimer);
-			this.observer?.disconnect();
+			for (const cancel of [...this.cancelWaits]) cancel();
+			this.destroyDomObserver?.();
 			this.destroyAspNet?.();
 			this.removeHost();
 			this.toast?.remove();
 			document.body?.classList.remove("km-unspsc-running");
-			this.observer = null;
+			this.destroyDomObserver = null;
 			this.destroyAspNet = null;
 			this.toast = null;
 		}
@@ -3809,8 +4011,15 @@
 			if (code.length !== 8 || this.running || this.autoSubmitTimer) return;
 			this.startFill(code);
 		};
+		beginOperation(code, message) {
+			this.running = true;
+			this.activeCode = code;
+			document.body.classList.add("km-unspsc-running");
+			this.setState(message, "busy");
+			return ++this.serial;
+		}
 		async startFill(code) {
-			if (this.running || code.length !== 8) return;
+			if (this.running || !/^\d{8}$/.test(code)) return;
 			const native = findNativeUnspscElements();
 			if (!native) {
 				this.setState("Abra a aba Classificações e tente novamente.", "error");
@@ -3820,202 +4029,143 @@
 				this.setState("UNSPSC já preenchida.", "success");
 				return;
 			}
-			const serial = ++this.serial;
-			this.running = true;
-			this.activeCode = code;
+			const serial = this.beginOperation(code, "Abrindo consulta UNSPSC...");
 			writePendingUnspsc({
 				code,
 				stage: "opening"
 			});
-			document.body.classList.add("km-unspsc-running");
-			this.setState("Abrindo consulta UNSPSC...", "busy");
-			try {
-				const previousModal = findUnspscModal();
-				native.lookup.click();
-				await this.waitForCondition(() => {
-					const modal = findUnspscModal();
-					return Boolean(modal && modal !== previousModal);
-				}, serial);
-				markUnspscModal(findUnspscModal());
-				const modalCode = this.requireInput(SELECTORS.modalCode);
-				const search = this.requireInput(SELECTORS.modalSearch);
-				setInputValue(modalCode, code);
-				this.setState("Pesquisando código UNSPSC...", "busy");
-				writePendingUnspsc({
-					code,
-					stage: "searching"
-				});
-				const previousResults = findUnspscModal()?.querySelector(SELECTORS.modalResults) ?? null;
-				const previousResultsHtml = previousResults?.innerHTML || "";
-				search.click();
-				await this.waitForCondition(() => {
-					const results = findUnspscModal()?.querySelector(SELECTORS.modalResults);
-					return Boolean(results && (results !== previousResults || results.innerHTML !== previousResultsHtml));
-				}, serial);
-				const resultSelector = findExactResult(code);
-				if (!resultSelector) throw new Error("UNSPSC_NOT_FOUND");
-				this.setState("Selecionando classificação...", "busy");
-				writePendingUnspsc({
-					code,
-					stage: "selecting"
-				});
-				const previousGrid = findUnspscModal()?.querySelector(SELECTORS.modalGrid) ?? null;
-				const previousGridHtml = previousGrid?.outerHTML || "";
-				resultSelector.click();
-				await this.waitForCondition(() => {
-					const grid = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
-					return !resultSelector.isConnected || grid !== previousGrid || grid?.outerHTML !== previousGridHtml;
-				}, serial);
-				const close = this.requireInput(SELECTORS.modalClose);
-				this.setState("Aplicando UNSPSC ao item...", "busy");
-				writePendingUnspsc({
-					code,
-					stage: "closing"
-				});
-				close.click();
-				await this.waitForCondition(() => !findUnspscModal(), serial);
-				await this.waitForCondition(() => {
-					const current = findNativeUnspscElements();
-					return Boolean(current && extractCurrentCode(current.value.value) === code);
-				}, serial);
-				this.running = false;
-				this.activeCode = "";
-				clearPendingUnspsc();
-				document.body.classList.remove("km-unspsc-running");
-				this.sync();
-				this.setState("UNSPSC preenchida.", "success");
-			} catch (error) {
-				if (serial !== this.serial) return;
-				await this.cancelModal(serial);
-				this.running = false;
-				this.activeCode = "";
-				clearPendingUnspsc();
-				document.body.classList.remove("km-unspsc-running");
-				this.sync();
-				this.setState(error instanceof Error && error.message === "UNSPSC_NOT_FOUND" ? "Código UNSPSC não encontrado." : "Falha na consulta. Use a lupa.", "error");
-			}
+			await this.executeFill(code, "opening", serial, native.lookup);
 		}
 		async resumePending() {
 			const pending = readPendingUnspsc();
-			if (!pending || this.running) return;
-			const native = findNativeUnspscElements();
-			if (!native) return;
-			const currentModal = findUnspscModal();
-			if (!currentModal) {
-				if (pending.stage === "closing" && extractCurrentCode(native.value.value) === pending.code) {
-					clearPendingUnspsc();
-					this.setState("UNSPSC preenchida.", "success");
-				}
-				return;
-			}
-			const serial = ++this.serial;
-			this.running = true;
-			this.activeCode = pending.code;
-			document.body.classList.add("km-unspsc-running");
-			markUnspscModal(currentModal);
-			this.setState("Retomando consulta UNSPSC...", "busy");
+			if (!pending || this.running || !findNativeUnspscElements()) return;
+			if (!findUnspscModal() && pending.stage !== "closing") return;
+			const serial = this.beginOperation(pending.code, "Retomando consulta UNSPSC...");
+			await this.executeFill(pending.code, pending.stage, serial);
+		}
+		async executeFill(code, stage, serial, lookup) {
+			let message = "UNSPSC preenchida.";
+			let tone = "success";
 			try {
-				if (pending.stage === "selecting" || pending.stage === "closing") {
-					const close = this.requireInput(SELECTORS.modalClose);
-					writePendingUnspsc({
-						code: pending.code,
-						stage: "closing"
-					});
-					close.click();
-					await this.waitForCondition(() => !findUnspscModal(), serial);
-				} else {
-					let grid = pending.stage === "searching" ? currentModal.querySelector(SELECTORS.modalGrid) : null;
-					if (!grid) {
-						const modalCode = this.requireInput(SELECTORS.modalCode);
-						const search = this.requireInput(SELECTORS.modalSearch);
-						const previousResults = currentModal.querySelector(SELECTORS.modalResults);
-						const previousResultsHtml = previousResults?.innerHTML || "";
-						setInputValue(modalCode, pending.code);
-						writePendingUnspsc({
-							code: pending.code,
-							stage: "searching"
-						});
-						search.click();
-						await this.waitForCondition(() => {
-							const results = findUnspscModal()?.querySelector(SELECTORS.modalResults);
-							return Boolean(results && results.querySelector(SELECTORS.modalGrid) && (results !== previousResults || results.innerHTML !== previousResultsHtml));
-						}, serial);
-						grid = findUnspscModal()?.querySelector(SELECTORS.modalGrid) ?? null;
-					}
-					const resultSelector = findExactResult(pending.code);
-					if (!grid || !resultSelector) throw new Error("UNSPSC_NOT_FOUND");
-					writePendingUnspsc({
-						code: pending.code,
-						stage: "selecting"
-					});
-					resultSelector.click();
+				if (lookup) {
+					const previousModal = findUnspscModal();
+					lookup.click();
 					await this.waitForCondition(() => {
-						const nextGrid = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
-						return !resultSelector.isConnected || nextGrid !== grid || nextGrid?.outerHTML !== grid.outerHTML;
+						const modal = findUnspscModal();
+						return Boolean(modal && modal !== previousModal);
 					}, serial);
-					const close = this.requireInput(SELECTORS.modalClose);
+				}
+				this.assertActive(serial);
+				markUnspscModal(findUnspscModal());
+				if (stage === "opening" || stage === "searching") {
+					const modal = findUnspscModal();
+					if (!(stage === "searching" && modal?.querySelector(SELECTORS.modalCode)?.value === code && modal.querySelector(SELECTORS.modalGrid))) await this.searchCode(code, serial);
+					await this.selectCode(code, serial);
+				}
+				this.assertActive(serial);
+				if (findUnspscModal()) {
+					this.setState("Aplicando UNSPSC ao item...", "busy");
 					writePendingUnspsc({
-						code: pending.code,
+						code,
 						stage: "closing"
 					});
-					close.click();
+					this.requireInput(SELECTORS.modalClose).click();
 					await this.waitForCondition(() => !findUnspscModal(), serial);
 				}
-				const updated = findNativeUnspscElements();
-				if (updated && extractCurrentCode(updated.value.value) === pending.code) {
+				await this.waitForCondition(() => {
+					const native = findNativeUnspscElements();
+					return Boolean(native && extractCurrentCode(native.value.value) === code);
+				}, serial, 100);
+			} catch (error) {
+				if (serial !== this.serial) return;
+				await this.cancelModal(serial);
+				message = error instanceof UnspscFlowError && error.code === "NOT_FOUND" ? "Código UNSPSC não encontrado." : "Falha na consulta. Use a lupa.";
+				tone = "error";
+			} finally {
+				if (serial === this.serial) {
 					clearPendingUnspsc();
 					this.running = false;
 					this.activeCode = "";
 					document.body.classList.remove("km-unspsc-running");
 					this.sync();
-					this.setState("UNSPSC preenchida.", "success");
+					this.setState(message, tone);
 				}
-			} catch (error) {
-				if (serial !== this.serial) return;
-				await this.cancelModal(serial);
-				clearPendingUnspsc();
-				this.running = false;
-				this.activeCode = "";
-				document.body.classList.remove("km-unspsc-running");
-				this.sync();
-				this.setState(error instanceof Error && error.message === "UNSPSC_NOT_FOUND" ? "Código UNSPSC não encontrado." : "Falha na consulta. Use a lupa.", "error");
 			}
+		}
+		async searchCode(code, serial) {
+			this.assertActive(serial);
+			const modalCode = this.requireInput(SELECTORS.modalCode);
+			const search = this.requireInput(SELECTORS.modalSearch);
+			setInputValue(modalCode, code);
+			this.setState("Pesquisando código UNSPSC...", "busy");
+			writePendingUnspsc({
+				code,
+				stage: "searching"
+			});
+			const previous = findUnspscModal()?.querySelector(SELECTORS.modalResults);
+			const child = previous?.firstElementChild;
+			const text = previous?.textContent;
+			search.click();
+			await this.waitForCondition(() => {
+				const results = findUnspscModal()?.querySelector(SELECTORS.modalResults);
+				return Boolean(results && (results !== previous || results.firstElementChild !== child || results.textContent !== text));
+			}, serial);
+		}
+		async selectCode(code, serial) {
+			this.assertActive(serial);
+			const selector = findExactResult(code);
+			if (!selector) throw new UnspscFlowError("NOT_FOUND");
+			this.setState("Selecionando classificação...", "busy");
+			writePendingUnspsc({
+				code,
+				stage: "selecting"
+			});
+			const previous = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
+			const child = previous?.firstElementChild;
+			const text = previous?.textContent;
+			const checked = selector.checked;
+			selector.click();
+			await this.waitForCondition(() => {
+				const grid = findUnspscModal()?.querySelector(SELECTORS.modalGrid);
+				return !selector.isConnected || grid !== previous || grid?.firstElementChild !== child || grid?.textContent !== text || selector.checked !== checked;
+			}, serial);
+		}
+		assertActive(serial) {
+			if (serial !== this.serial) throw new UnspscFlowError("CANCELLED");
 		}
 		requireInput(selector) {
 			const input = findUnspscModal()?.querySelector(selector);
-			if (!input) throw new Error(`Controle UNSPSC indisponível: ${selector}`);
+			if (!input) throw new UnspscFlowError("CONTROL_UNAVAILABLE");
 			return input;
 		}
-		waitForCondition(condition, serial) {
+		waitForCondition(condition, serial, pollMs = 0) {
+			this.assertActive(serial);
 			if (condition()) return Promise.resolve();
 			return new Promise((resolve, reject) => {
 				let settled = false;
-				const root = document.body ?? document.documentElement;
-				const timerHost = root.ownerDocument?.defaultView ?? window;
+				let stopObserving = () => {};
+				let interval = 0;
+				let timeout = 0;
 				const finish = (error) => {
 					if (settled) return;
 					settled = true;
-					observer.disconnect();
-					timerHost.clearInterval(interval);
-					timerHost.clearTimeout(timeout);
+					stopObserving();
+					if (interval) window.clearInterval(interval);
+					window.clearTimeout(timeout);
+					this.cancelWaits.delete(cancel);
 					if (error) reject(error);
 					else resolve();
 				};
+				const cancel = () => finish(new UnspscFlowError("CANCELLED"));
 				const check = () => {
-					if (serial !== this.serial) {
-						finish(new Error("UNSPSC_CANCELLED"));
-						return;
-					}
-					if (condition()) finish();
+					if (serial !== this.serial) cancel();
+					else if (condition()) finish();
 				};
-				const observer = new MutationObserver(check);
-				observer.observe(root, {
-					childList: true,
-					subtree: true,
-					attributes: true
-				});
-				const interval = timerHost.setInterval(check, 50);
-				const timeout = timerHost.setTimeout(() => finish(new Error("UNSPSC_TIMEOUT")), this.timeoutMs);
+				this.cancelWaits.add(cancel);
+				stopObserving = observeUnspscChanges(check);
+				if (pollMs) interval = window.setInterval(check, pollMs);
+				timeout = window.setTimeout(() => finish(new UnspscFlowError("TIMEOUT")), this.timeoutMs);
+				check();
 			});
 		}
 		async cancelModal(serial) {
@@ -4069,50 +4219,11 @@
 			this.syncTimer = window.setTimeout(() => {
 				this.syncTimer = 0;
 				this.sync();
+				this.resumePending();
 			}, 60);
 		}
 		bindMutationObserver() {
-			const root = document.body ?? document.documentElement;
-			this.observer = new MutationObserver((records) => {
-				if (records.some((record) => {
-					if ((record.target instanceof Element ? record.target : record.target.parentElement)?.closest(OWNED_SELECTOR)) return false;
-					const changedNodes = [...record.addedNodes, ...record.removedNodes];
-					return changedNodes.length === 0 || changedNodes.some((node) => {
-						if (!(node instanceof Element)) return true;
-						return !node.matches(OWNED_SELECTOR) && !node.querySelector(OWNED_SELECTOR);
-					});
-				})) this.scheduleSync();
-			});
-			this.observer.observe(root, {
-				childList: true,
-				subtree: true
-			});
-		}
-		bindAspNetEndRequest() {
-			let disposed = false;
-			let intervalId = 0;
-			let manager = null;
-			const handler = () => this.scheduleSync();
-			const deadline = Date.now() + 8e3;
-			intervalId = window.setInterval(() => {
-				if (disposed || Date.now() > deadline) {
-					window.clearInterval(intervalId);
-					return;
-				}
-				const maybeManager = getPageWindow().Sys?.WebForms?.PageRequestManager?.getInstance?.();
-				if (!maybeManager) return;
-				window.clearInterval(intervalId);
-				manager = maybeManager;
-				manager.add_endRequest(handler);
-			}, 250);
-			return () => {
-				disposed = true;
-				if (intervalId) window.clearInterval(intervalId);
-				if (!manager) return;
-				try {
-					manager.remove_endRequest(handler);
-				} catch {}
-			};
+			this.destroyDomObserver = observeUnspscChanges(() => this.scheduleSync());
 		}
 		injectStyles() {
 			if (document.getElementById(STYLE_ID)) return;
@@ -4152,13 +4263,10 @@
 		const label = getAlwaysOpenMenuLabel(loadSettings().alwaysOpen);
 		alwaysOpenMenuId = GM_registerMenuCommand(label, () => {
 			const currentSettings = loadSettings();
-			const nextSettings = {
+			saveSettings({
 				...currentSettings,
 				alwaysOpen: !currentSettings.alwaysOpen
-			};
-			saveSettings(nextSettings);
-			app?.applySettings(nextSettings);
-			syncAlwaysOpenMenu();
+			});
 		});
 	}
 	function handleStorageEvent(event) {

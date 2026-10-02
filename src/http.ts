@@ -1,3 +1,12 @@
+import {
+  createUnknownHttpError,
+  getHttpErrorName,
+  HTTP_ERROR_CODES,
+  HttpRequestError
+} from './http-errors';
+
+const HTTP_TIMEOUT_MS = 30000;
+
 function extractCharsetContentType(contentType: string = ''): string {
   const match = String(contentType || '').match(/charset\s*=\s*["']?([^;"'\s]+)/i);
   return match?.[1] ? match[1].trim().toLowerCase() : '';
@@ -151,7 +160,7 @@ export function detectKlassmattErrorPage(doc: Document): KlassmattErrorInfo {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
+  return getHttpErrorName(error) === 'AbortError';
 }
 
 function isHtmlContentType(contentType: string): boolean {
@@ -169,13 +178,28 @@ interface FetchTransportResult {
   wasRedirected: boolean;
 }
 
-function isNetworkFetchError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return /failed to fetch|networkerror|network request failed/i.test(error.message);
+function getAbortError(): HttpRequestError {
+  return new HttpRequestError(
+    HTTP_ERROR_CODES.ABORTED,
+    'The operation was aborted.',
+    { name: 'AbortError' }
+  );
 }
 
-function getAbortError(): DOMException {
-  return new DOMException('The operation was aborted.', 'AbortError');
+function getTimeoutError(): HttpRequestError {
+  return new HttpRequestError(
+    HTTP_ERROR_CODES.TIMEOUT,
+    'Timeout ao carregar o historico.',
+    { name: 'TimeoutError' }
+  );
+}
+
+function getNetworkError(cause?: unknown): HttpRequestError {
+  return new HttpRequestError(
+    HTTP_ERROR_CODES.NETWORK,
+    'Falha de conexao com o servidor.',
+    { cause }
+  );
 }
 
 function parseTampermonkeyHeaders(rawHeaders: string = ''): Headers {
@@ -194,12 +218,12 @@ function fetchWithTampermonkey(
   requestedUrl: URL,
   signal?: AbortSignal
 ): Promise<FetchTransportResult> {
-  if (typeof GM_xmlhttpRequest !== 'function') {
-    return Promise.reject(new TypeError('Failed to fetch'));
+  if (signal?.aborted) {
+    return Promise.reject(signal.reason ?? getAbortError());
   }
 
-  if (signal?.aborted) {
-    return Promise.reject(getAbortError());
+  if (typeof GM_xmlhttpRequest !== 'function') {
+    return Promise.reject(getNetworkError());
   }
 
   return new Promise((resolve, reject) => {
@@ -221,7 +245,7 @@ function fetchWithTampermonkey(
     handleAbort = (): void => {
       if (settled) return;
       request?.abort();
-      settle(() => reject(getAbortError()));
+      settle(() => reject(signal?.reason ?? getAbortError()));
     };
 
     signal?.addEventListener('abort', handleAbort, { once: true });
@@ -231,7 +255,7 @@ function fetchWithTampermonkey(
         method: 'GET',
         url: requestedUrl.toString(),
         responseType: 'arraybuffer',
-        timeout: 30000,
+        timeout: HTTP_TIMEOUT_MS,
         onload: (response) => {
           settle(() => {
             try {
@@ -249,14 +273,14 @@ function fetchWithTampermonkey(
             }
           });
         },
-        onerror: () => settle(() => reject(new TypeError('Failed to fetch'))),
-        ontimeout: () => settle(() => reject(new Error('Network timeout'))),
+        onerror: () => settle(() => reject(getNetworkError())),
+        ontimeout: () => settle(() => reject(getTimeoutError())),
         onabort: () => settle(() => reject(getAbortError()))
       });
 
       if (signal?.aborted) handleAbort();
     } catch (error) {
-      settle(() => reject(error));
+      settle(() => reject(error instanceof TypeError ? getNetworkError(error) : error));
     }
   });
 }
@@ -278,46 +302,62 @@ async function fetchResponse(
       wasRedirected: response.redirected
     };
   } catch (error) {
+    if (signal?.aborted) throw signal.reason;
     if (isAbortError(error)) throw error;
 
     const pageOrigin = new URL(window.location.href).origin;
-    if (!isNetworkFetchError(error) || requestedUrl.origin !== pageOrigin) {
+    if (!(error instanceof TypeError)) {
       throw error;
+    }
+
+    if (requestedUrl.origin !== pageOrigin) {
+      throw getNetworkError(error);
     }
 
     return fetchWithTampermonkey(requestedUrl, signal);
   }
 }
 
-export async function fetchHtml(
-  url: string,
-  signal?: AbortSignal
+async function readHtml(
+  requestedUrl: URL,
+  signal: AbortSignal
 ): Promise<FetchHtmlResult> {
-  const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
-
   try {
     const transport = await fetchResponse(requestedUrl, signal);
     const response = transport.response;
 
     if (!response.ok) {
-      throw new Error(`Falha HTTP ${response.status}`);
+      throw new HttpRequestError(
+        HTTP_ERROR_CODES.HTTP_STATUS,
+        `Falha HTTP ${response.status}`,
+        { status: response.status }
+      );
     }
 
     const contentType = response.headers.get('content-type') || '';
     if (!isHtmlContentType(contentType)) {
-      throw new Error(`Response inesperado: content-type ${contentType || 'vazio'}`);
+      throw new HttpRequestError(
+        HTTP_ERROR_CODES.CONTENT_TYPE,
+        `Response inesperado: content-type ${contentType || 'vazio'}`,
+        { contentType }
+      );
     }
 
-    const buffer = await response.arrayBuffer();
-    const html = decodeHttpText(buffer, contentType);
     const responseUrl = resolveAbsoluteUrl(
       transport.responseUrl || requestedUrl.toString(),
       requestedUrl.toString()
     );
 
     if (responseUrl.origin !== requestedUrl.origin) {
-      throw new Error(`Redirecionamento bloqueado para origem inesperada: ${responseUrl.origin}`);
+      throw new HttpRequestError(
+        HTTP_ERROR_CODES.ORIGIN_BLOCKED,
+        'Redirecionamento bloqueado para origem inesperada.',
+        { origin: responseUrl.origin }
+      );
     }
+
+    const buffer = await response.arrayBuffer();
+    const html = decodeHttpText(buffer, contentType);
 
     return {
       html,
@@ -327,6 +367,36 @@ export async function fetchHtml(
     };
   } catch (error) {
     if (isAbortError(error)) throw error;
-    throw error instanceof Error ? error : new Error(String(error));
+    if (error instanceof TypeError) throw getNetworkError(error);
+    throw error instanceof Error ? error : createUnknownHttpError(error);
+  }
+}
+
+export async function fetchHtml(
+  url: string,
+  signal?: AbortSignal
+): Promise<FetchHtmlResult> {
+  if (signal?.aborted) throw getAbortError();
+  const requestedUrl = resolveAbsoluteUrl(url, window.location.href);
+  const controller = new AbortController();
+  let rejectDeadline!: (error: Error | DOMException) => void;
+  const deadline = new Promise<never>((_, reject) => {
+    rejectDeadline = reject;
+  });
+  const cancel = (error: Error | DOMException): void => {
+    if (controller.signal.aborted) return;
+    rejectDeadline(error);
+    controller.abort(error);
+  };
+  const handleAbort = (): void => cancel(getAbortError());
+  const timeout = window.setTimeout(() => cancel(getTimeoutError()), HTTP_TIMEOUT_MS);
+  signal?.addEventListener('abort', handleAbort, { once: true });
+
+  try {
+    // Keep the deadline active through the fallback and response body read.
+    return await Promise.race([readHtml(requestedUrl, controller.signal), deadline]);
+  } finally {
+    window.clearTimeout(timeout);
+    signal?.removeEventListener('abort', handleAbort);
   }
 }

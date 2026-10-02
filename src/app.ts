@@ -1,21 +1,11 @@
-import { detectKlassmattErrorPage, fetchHtml } from './http';
-import {
-  extractHistoryIdentityFromUrl,
-  formatHistoryIdentity,
-  type HistoryIdentity,
-  validateHistoryIdentity
-} from './history-identity';
-import {
-  parseHistoryStrict,
-  scopeTimelineToItem,
-  type ParseHistoryResult,
-  type TimelineEvent
-} from './parse';
+import { HistoryRepository, type SinHistoryResult } from './history-repository';
+import { PageLifecycle } from './page-lifecycle';
+import { extractHistoryIdentityFromUrl } from './history-identity';
+import type { TimelineEvent } from './parse';
 import {
   getInlinePanelToggleLabel,
   loadSettings,
   saveSettings,
-  SETTINGS_KEY,
   type SinPanelSettings,
   type TimelineMode
 } from './state';
@@ -38,10 +28,7 @@ import {
   type SinPageContext
 } from './url';
 
-interface PageRequestManagerLike {
-  add_endRequest(fn: () => void): void;
-  remove_endRequest(fn: () => void): void;
-}
+export type { SinHistoryResult } from './history-repository';
 
 export type RefreshMode = 'manual' | 'semi-auto' | 'auto';
 
@@ -50,192 +37,28 @@ interface AppOptions {
   hookAspNet?: boolean;
 }
 
-interface ResolvedAppOptions {
-  refreshMode: RefreshMode;
-  hookAspNet: boolean;
-}
-
-export interface SinHistoryResult {
-  mode: 'parsed' | 'iframe' | 'error' | 'empty' | 'blocked' | 'session-error';
-  timeline: TimelineEvent[];
-  diagnostic?: string;
-  actionHint?: string;
-  summary?: ParseHistoryResult['summary'];
-  warnings?: string[];
-  confidence?: ParseHistoryResult['confidence'];
-  documentIdentity?: HistoryIdentity | null;
-  inlineHtml?: string;
-  inlineBaseUrl?: string;
-}
-
 interface ParsedTimelineState {
   allTimeline: TimelineEvent[];
   yellowTimeline: TimelineEvent[];
   historyUrl: string;
-  result: SinHistoryResult & { mode: 'parsed'; summary: NonNullable<SinHistoryResult['summary']> };
+  result: Extract<SinHistoryResult, { mode: 'parsed' }>;
 }
 
 const RENDER_BATCH_SIZE = 30;
-const MAX_HISTORY_CACHE_ENTRIES = 5;
-const CONTEXT_MUTATION_SELECTOR = [
-  '#UpdatePanel1',
-  '.kl-view',
-  '#DV_Resumo_sin',
-  '#Label_infoSIN',
-  '#hButAcompanhamentoSIN',
-  '#hlkObs',
-  '#txtNumero'
-].join(', ');
-const OWN_UI_MUTATION_SELECTOR = [
-  '.km-sin-layout',
-  '.km-sin-inline-toggle',
-  '[data-km-unspsc-quick="1"]',
-  '[data-km-unspsc-toast="1"]',
-  '#km-sin-sidebar-style',
-  '#km-unspsc-quick-style'
-].join(', ');
-declare const unsafeWindow: (Window & typeof globalThis) | undefined;
-
-function getMutationElement(node: Node): Element | null {
-  if (node.nodeType === 1) return node as Element;
-  return node.parentElement;
-}
-
-function isOwnedUiNode(node: Node): boolean {
-  const element = getMutationElement(node);
-  return Boolean(element?.matches(OWN_UI_MUTATION_SELECTOR) || element?.closest(OWN_UI_MUTATION_SELECTOR));
-}
-
-function nodeTouchesContext(node: Node): boolean {
-  const element = getMutationElement(node);
-  return Boolean(
-    element?.matches(CONTEXT_MUTATION_SELECTOR)
-    || element?.closest(CONTEXT_MUTATION_SELECTOR)
-    || element?.querySelector(CONTEXT_MUTATION_SELECTOR)
-  );
-}
-
-function hasRelevantContextMutation(records: MutationRecord[]): boolean {
-  return records.some((record) => {
-    const target = getMutationElement(record.target);
-    if (target?.closest(OWN_UI_MUTATION_SELECTOR)) return false;
-    if (target?.matches(CONTEXT_MUTATION_SELECTOR) || target?.closest(CONTEXT_MUTATION_SELECTOR)) return true;
-
-    return [...record.addedNodes, ...record.removedNodes].some((node) => {
-      if (isOwnedUiNode(node)) return false;
-      return nodeTouchesContext(node);
-    });
-  });
-}
-
-function resolveRefreshMode(options: AppOptions): RefreshMode {
-  return options.refreshMode ?? 'manual';
-}
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof Error && error.name === 'AbortError';
-}
-
-function getPageWindow(): Window & typeof globalThis {
-  return typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+  return (error instanceof Error || error instanceof DOMException) && error.name === 'AbortError';
 }
 
 function getSafeHistoryUrl(rawUrl: string | null | undefined): string | null {
   return extractHistoryIdentityFromUrl(rawUrl)?.absoluteUrl || null;
 }
 
-function buildBlockedDiagnostic(
-  title: string,
-  reasons: string[],
-  expectedIdentity: HistoryIdentity | null,
-  actualIdentity: HistoryIdentity | null
-): string {
-  const parts = [
-    title,
-    ...reasons,
-    expectedIdentity ? `Esperado: ${formatHistoryIdentity(expectedIdentity)}.` : '',
-    actualIdentity ? `Retornado: ${formatHistoryIdentity(actualIdentity)}.` : ''
-  ].filter(Boolean);
-
-  return parts.join(' ');
-}
-
-function isSecurityBlockedError(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-  return /origem inesperada|redirecionamento bloqueado/i.test(error.message);
-}
-
-function classifyErrorForUser(error: unknown, wasRedirected?: boolean): { diagnostic: string; actionHint: string } {
-  if (error instanceof Error) {
-    const msg = error.message.toLowerCase();
-
-    if (/falha http 401|falha http 403/i.test(msg)) {
-      return {
-        diagnostic: 'O Klassmatt recusou o acesso ao historico.',
-        actionHint: 'Recarregue a pagina (F5) para renovar a sessao.'
-      };
-    }
-
-    if (/falha http 5\d\d/i.test(msg)) {
-      return {
-        diagnostic: 'O servidor do Klassmatt retornou um erro interno.',
-        actionHint: 'Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar.'
-      };
-    }
-
-    if (/network|fetch|econnreset|econnrefused|socket/i.test(msg)) {
-      return {
-        diagnostic: 'Falha de conexao com o servidor.',
-        actionHint: 'Verifique sua rede e, depois, reabra o painel ou recarregue a pagina (F5).'
-      };
-    }
-
-    if (/timeout/i.test(msg)) {
-      return {
-        diagnostic: 'O servidor demorou demais para responder.',
-        actionHint: 'Feche e abra o painel novamente para tentar de novo.'
-      };
-    }
-
-    if (/content-type/i.test(msg)) {
-      return {
-        diagnostic: 'O servidor retornou um conteudo inesperado (nao HTML).',
-        actionHint: 'Use o botao Ver inline para abrir uma visualizacao segura do historico.'
-      };
-    }
-
-    if (/origem inesperada|redirecionamento bloqueado/i.test(msg)) {
-      return {
-        diagnostic: 'O carregamento foi bloqueado porque o servidor tentou responder por uma origem inesperada.',
-        actionHint: 'Recarregue a pagina (F5) e confirme se o link nativo do historico ainda aponta para o Klassmatt.'
-      };
-    }
-  }
-
-  if (wasRedirected) {
-    return {
-      diagnostic: 'O Klassmatt redirecionou a solicitacao para outra pagina.',
-      actionHint: 'A sessao pode ter expirado. Recarregue a pagina (F5).'
-    };
-  }
-
-  const message = error instanceof Error ? error.message : String(error);
-  return {
-    diagnostic: `Falha ao buscar ou interpretar o historico: ${message}`,
-    actionHint: 'Feche e abra o painel novamente para tentar de novo.'
-  };
-}
-
 export class SinSidebarApp {
-  private readonly options: ResolvedAppOptions;
-  private readonly cache = new Map<string, SinHistoryResult>();
-  private readonly inflight = new Map<string, Promise<SinHistoryResult>>();
+  private readonly history = new HistoryRepository();
+  private readonly lifecycle: PageLifecycle;
   private settings: SinPanelSettings = loadSettings();
-  private destroyAspNet: (() => void) | null = null;
-  private destroyContextEvents: (() => void) | null = null;
   private loadSerial = 0;
-  private activeFetch: AbortController | null = null;
-  private activeFetchKey: string | null = null;
   private currentShell: ShellRefs | null = null;
   private currentViewRoot: HTMLElement | null = null;
   private currentContext: SinPageContext | null = null;
@@ -245,7 +68,6 @@ export class SinSidebarApp {
   private inlinePanelOverride: boolean | null = null;
   private panelOpen = this.settings.alwaysOpen;
   private currentContextKey: string | null = null;
-  private observedContextSignature: string | null = null;
   private toggleHost: HTMLSpanElement | null = null;
   private toggleButton: HTMLButtonElement | null = null;
   private toggleParent: HTMLElement | null = null;
@@ -282,7 +104,7 @@ export class SinSidebarApp {
     const shell = this.currentShell;
     const safeHistoryUrl = getSafeHistoryUrl(context.historyUrl);
     if (shell && safeHistoryUrl) {
-      this.abortActiveFetch();
+      this.history.abort();
       setShellState(shell, 'Exibindo visualizacao segura do historico...', 'default');
       renderIframeFallback(
         shell,
@@ -309,44 +131,31 @@ export class SinSidebarApp {
     this.renderStoredTimeline(shell, previousCount);
   };
 
-  private readonly handleStorageEvent = (event: Event): void => {
-    const storageEvent = event as StorageEvent;
-    if (storageEvent.key !== null && storageEvent.key !== SETTINGS_KEY) return;
-
+  private readonly handleSettingsChange = (): void => {
     this.applySettings(loadSettings());
   };
 
-  private readonly handlePageLifecycleEvent = (event?: Event): void => {
-    if (event?.type === 'pageshow') {
-      const pageShowEvent = event as PageTransitionEvent;
-      if (!pageShowEvent.persisted) {
-        return;
-      }
-    }
-
+  private readonly handleContextChange = (quickContext: QuickSinPageContext): void => {
     this.syncSettingsFromStorage();
-    const quickContext = resolveQuickPageContext();
-    this.observedContextSignature = this.captureContextSignature(quickContext);
     this.syncContextScope(quickContext);
     if (this.panelOpen) {
       void this.hydrate(true);
       return;
     }
-
     this.syncClosedState(quickContext);
   };
 
   constructor(options: AppOptions = {}) {
-    this.options = {
-      refreshMode: resolveRefreshMode(options),
-      hookAspNet: options.hookAspNet ?? true
-    };
+    this.lifecycle = new PageLifecycle({
+      hookAspNet: options.hookAspNet ?? true,
+      onContextChange: this.handleContextChange,
+      onSettingsChange: this.handleSettingsChange
+    });
   }
 
   init(): void {
     injectStyles();
-    this.destroyContextEvents = this.bindContextEvents();
-    if (this.options.hookAspNet) this.destroyAspNet = this.bindAspNetEndRequest();
+    this.lifecycle.start();
     if (this.panelOpen) {
       void this.hydrate(true);
       return;
@@ -361,9 +170,8 @@ export class SinSidebarApp {
     this.inlinePanelOverride = null;
     this.currentContext = null;
     this.currentContextKey = null;
-    if (this.destroyAspNet) this.destroyAspNet();
-    if (this.destroyContextEvents) this.destroyContextEvents();
-    this.abortActiveFetch();
+    this.lifecycle.destroy();
+    this.history.abort();
     this.removeInlineToggle();
     this.clearParsedState();
   }
@@ -439,7 +247,7 @@ export class SinSidebarApp {
     this.setAsideVisible(shell, true);
 
     if (!context.summaryEl) {
-      this.abortActiveFetch();
+      this.history.abort();
       this.clearParsedState();
       shell.inlineButton.disabled = true;
       setShellMeta(shell, 'Aguardando area de resumo da SIN');
@@ -452,7 +260,7 @@ export class SinSidebarApp {
     shell.inlineButton.disabled = !Boolean(safeHistoryUrl);
 
     if (!context.historyIdentity?.absoluteUrl) {
-      this.abortActiveFetch();
+      this.history.abort();
       this.clearParsedState();
       setShellMeta(
         shell,
@@ -466,7 +274,7 @@ export class SinSidebarApp {
     }
 
     if (!confirmedContext || !context.isStable) {
-      this.abortActiveFetch();
+      this.history.abort();
       this.clearParsedState();
       setShellMeta(
         shell,
@@ -491,14 +299,14 @@ export class SinSidebarApp {
 
     let result: SinHistoryResult;
     try {
-      result = await this.getHistoryResult(confirmedContext, force);
+      result = await this.history.get(confirmedContext, force);
     } catch (error) {
       if (serial !== this.loadSerial || isAbortError(error)) return;
-      const message = error instanceof Error ? error.message : String(error);
       result = {
         mode: 'error',
         timeline: [],
-        diagnostic: `Falha ao buscar ou interpretar o historico: ${message}`
+        diagnostic: 'Falha ao buscar ou interpretar o historico.',
+        actionHint: 'Feche e abra o painel novamente para tentar de novo.'
       };
     }
 
@@ -510,16 +318,12 @@ export class SinSidebarApp {
     const safeHistoryUrl = getSafeHistoryUrl(context.historyUrl) || window.location.href;
     this.latestResult = result;
 
-    if (result.mode === 'parsed' && result.summary) {
-      const parsedResult = result as SinHistoryResult & {
-        mode: 'parsed';
-        summary: NonNullable<SinHistoryResult['summary']>;
-      };
+    if (result.mode === 'parsed') {
       this.latestParsed = {
-        allTimeline: parsedResult.timeline,
-        yellowTimeline: parsedResult.timeline.filter((event) => event.yellowComments.length > 0),
+        allTimeline: result.timeline,
+        yellowTimeline: result.timeline.filter((event) => event.yellowComments.length > 0),
         historyUrl: safeHistoryUrl,
-        result: parsedResult
+        result
       };
       this.renderedCount = 0;
       this.renderStoredTimeline(shell);
@@ -613,203 +417,6 @@ export class SinSidebarApp {
         ...model
       });
     }
-  }
-
-  private async getHistoryResult(context: SinPageContext, force = false): Promise<SinHistoryResult> {
-    const historyUrl = getSafeHistoryUrl(context.historyUrl);
-    if (!historyUrl) {
-      return {
-        mode: 'blocked',
-        timeline: [],
-        diagnostic: 'O link do historico aponta para uma origem inesperada ou nao confiavel.',
-        actionHint: 'Recarregue a pagina (F5) e confirme que o link nativo da SIN esta correto.'
-      };
-    }
-
-    const cacheKey = this.getHistoryCacheKey(context);
-    if (force) {
-      this.cache.delete(cacheKey);
-      this.purgeStaleCacheEntries(context.itemId, cacheKey);
-    }
-    if (!force) {
-      const cached = this.cache.get(cacheKey);
-      if (cached) {
-        this.cache.delete(cacheKey);
-        this.cache.set(cacheKey, cached);
-        return cached;
-      }
-    }
-    if (!force && this.inflight.has(cacheKey)) {
-      return this.inflight.get(cacheKey)!;
-    }
-
-    const task = (async () => {
-      try {
-        if (this.activeFetch && (force || this.activeFetchKey !== cacheKey)) {
-          this.abortActiveFetch();
-        }
-
-        this.activeFetch = new AbortController();
-        this.activeFetchKey = cacheKey;
-
-        const fetchResult = await fetchHtml(historyUrl, this.activeFetch.signal);
-        if (fetchResult.wasRedirected && !/Historico\.aspx/i.test(fetchResult.responseUrl)) {
-          this.cache.delete(cacheKey);
-          return {
-            mode: 'session-error',
-            timeline: [],
-            diagnostic: /Erro\.aspx|Login\.aspx|default\.aspx/i.test(fetchResult.responseUrl)
-              ? 'O Klassmatt redirecionou para uma pagina de erro ou login.'
-              : `O servidor redirecionou para ${fetchResult.responseUrl}.`,
-            actionHint: 'A sessao pode ter expirado. Recarregue a pagina (F5).'
-          } satisfies SinHistoryResult;
-        }
-
-        const doc = new DOMParser().parseFromString(fetchResult.html, 'text/html');
-        const errorCheck = detectKlassmattErrorPage(doc);
-        if (errorCheck.isError) {
-          this.cache.delete(cacheKey);
-          return {
-            mode: 'session-error',
-            timeline: [],
-            diagnostic: /ACESSO\s+N[ÃA]O\s+AUTORIZADO/i.test(errorCheck.errorMessage || '')
-              ? 'Acesso nao autorizado ao historico.'
-              : `O Klassmatt retornou uma pagina de erro: ${(errorCheck.errorMessage || 'Erro desconhecido').slice(0, 200)}`,
-            actionHint: 'Recarregue a pagina (F5) ou feche e abra o painel novamente quando quiser tentar de novo.'
-          } satisfies SinHistoryResult;
-        }
-
-        const parsed = parseHistoryStrict(doc, fetchResult.responseUrl);
-        const inlineBaseUrl = fetchResult.responseUrl || historyUrl;
-        const identityValidation = validateHistoryIdentity(context.historyIdentity, parsed.documentIdentity);
-
-        if (!identityValidation.isValid) {
-          return {
-            mode: 'blocked',
-            timeline: [],
-            diagnostic: buildBlockedDiagnostic(
-              'Historico bloqueado por divergencia entre o link nativo e o HTML retornado.',
-              identityValidation.reasons,
-              context.historyIdentity,
-              parsed.documentIdentity || null
-            ),
-            actionHint: 'Use o botao Ver inline para conferir a pagina nativa.',
-            summary: parsed.summary,
-            warnings: [...identityValidation.reasons, ...parsed.warnings],
-            confidence: 'low',
-            documentIdentity: parsed.documentIdentity,
-            inlineHtml: fetchResult.html,
-            inlineBaseUrl
-          } satisfies SinHistoryResult;
-        }
-
-        if (parsed.confidence !== 'high') {
-          return {
-            mode: 'blocked',
-            timeline: [],
-            diagnostic: buildBlockedDiagnostic(
-              'Historico bloqueado por baixa confianca do parser estrito.',
-              parsed.warnings,
-              context.historyIdentity,
-              parsed.documentIdentity || null
-            ),
-            actionHint: 'O formato do historico pode ter mudado. Use o botao Ver inline.',
-            summary: parsed.summary,
-            warnings: parsed.warnings,
-            confidence: parsed.confidence,
-            documentIdentity: parsed.documentIdentity,
-            inlineHtml: fetchResult.html,
-            inlineBaseUrl
-          } satisfies SinHistoryResult;
-        }
-
-        const scopedTimeline = context.itemId
-          ? scopeTimelineToItem(parsed.timeline, context.itemId)
-          : null;
-
-        if (scopedTimeline?.status === 'ambiguous') {
-          return {
-            mode: 'blocked',
-            timeline: [],
-            diagnostic: scopedTimeline.diagnostic,
-            actionHint: 'Use o botao Ver inline para conferir o historico completo da SIN.',
-            summary: parsed.summary,
-            warnings: [...parsed.warnings, scopedTimeline.diagnostic || ''],
-            confidence: 'low',
-            documentIdentity: parsed.documentIdentity,
-            inlineHtml: fetchResult.html,
-            inlineBaseUrl
-          } satisfies SinHistoryResult;
-        }
-
-        const effectiveTimeline = scopedTimeline?.status === 'filtered'
-          ? scopedTimeline.timeline
-          : parsed.timeline;
-        const effectiveSummary = scopedTimeline?.status === 'filtered'
-          ? scopedTimeline.summary
-          : parsed.summary;
-        const effectiveDiagnostic = scopedTimeline?.status === 'filtered'
-          ? scopedTimeline.diagnostic
-          : undefined;
-
-        const result: SinHistoryResult = effectiveTimeline.length > 0
-          ? {
-              mode: 'parsed',
-              timeline: effectiveTimeline,
-              diagnostic: effectiveDiagnostic,
-              summary: effectiveSummary,
-              warnings: parsed.warnings,
-              confidence: parsed.confidence,
-              documentIdentity: parsed.documentIdentity,
-              inlineHtml: fetchResult.html,
-              inlineBaseUrl
-            }
-          : {
-              mode: 'empty',
-              timeline: [],
-              diagnostic: 'O popup foi carregado, mas nao continha eventos reconheciveis.',
-              actionHint: 'Use o botao Ver inline para verificar.',
-              summary: effectiveSummary,
-              warnings: parsed.warnings,
-              confidence: parsed.confidence,
-              documentIdentity: parsed.documentIdentity,
-              inlineHtml: fetchResult.html,
-              inlineBaseUrl
-            };
-
-        this.setCachedHistory(cacheKey, result);
-        this.purgeStaleCacheEntries(context.itemId, cacheKey);
-        return result;
-      } catch (error) {
-        if (isAbortError(error)) throw error;
-        if (isSecurityBlockedError(error)) {
-          const classified = classifyErrorForUser(error);
-          return {
-            mode: 'blocked',
-            timeline: [],
-            diagnostic: classified.diagnostic,
-            actionHint: classified.actionHint
-          } satisfies SinHistoryResult;
-        }
-
-        const classified = classifyErrorForUser(error);
-        return {
-          mode: historyUrl ? 'iframe' : 'error',
-          timeline: [],
-          diagnostic: classified.diagnostic,
-          actionHint: classified.actionHint
-        } satisfies SinHistoryResult;
-      } finally {
-        if (this.activeFetchKey === cacheKey) {
-          this.activeFetch = null;
-          this.activeFetchKey = null;
-        }
-        this.inflight.delete(cacheKey);
-      }
-    })();
-
-    this.inflight.set(cacheKey, task);
-    return task;
   }
 
   private ensureCurrentShell(viewRoot: HTMLElement): ShellRefs {
@@ -950,23 +557,6 @@ export class SinSidebarApp {
     shell.layoutEl.classList.toggle('km-sin-collapsed', !visible);
   }
 
-  private abortActiveFetch(): void {
-    if (this.activeFetch) {
-      this.activeFetch.abort();
-    }
-    this.activeFetch = null;
-    this.activeFetchKey = null;
-  }
-
-  private captureContextSignature(context: QuickSinPageContext = resolveQuickPageContext()): string {
-    return [
-      window.location.href,
-      context.itemId || 'sem-item',
-      context.summarySinId || 'sem-sin-resumo',
-      context.historyIdentity?.fingerprint || context.historyUrl || context.sinId || 'sem-historico'
-    ].join('|');
-  }
-
   private async confirmTrustedContext(context: SinPageContext, serial: number): Promise<SinPageContext | null> {
     if (context.isStable && context.historyIdentity?.fingerprint) {
       return context;
@@ -996,7 +586,7 @@ export class SinSidebarApp {
   private closePanel(): void {
     this.panelOpen = false;
     this.loadSerial++;
-    this.abortActiveFetch();
+    this.history.abort();
     this.clearParsedState();
     this.currentContext = null;
     this.hideCurrentSidebar(true);
@@ -1024,109 +614,6 @@ export class SinSidebarApp {
       this.currentShell = null;
       this.currentViewRoot = null;
       this.currentContext = null;
-    }
-  }
-
-  private bindContextEvents(): () => void {
-    let disposed = false;
-    let mutationObserver: MutationObserver | null = null;
-    let mutationTimer = 0;
-    const observeRoot = document.body ?? document.documentElement;
-    const timerHost = observeRoot.ownerDocument?.defaultView ?? window;
-
-    const handleMutation = (): void => {
-      if (disposed) return;
-      mutationTimer = 0;
-      const nextSignature = this.captureContextSignature();
-      if (nextSignature === this.observedContextSignature) return;
-      this.observedContextSignature = nextSignature;
-      this.handlePageLifecycleEvent();
-    };
-
-    window.addEventListener('storage', this.handleStorageEvent);
-    window.addEventListener('pageshow', this.handlePageLifecycleEvent);
-    window.addEventListener('popstate', this.handlePageLifecycleEvent);
-    window.addEventListener('hashchange', this.handlePageLifecycleEvent);
-
-    if (observeRoot) {
-      this.observedContextSignature = this.captureContextSignature();
-      mutationObserver = new MutationObserver((records) => {
-        if (!hasRelevantContextMutation(records) || mutationTimer) return;
-        mutationTimer = timerHost.setTimeout(handleMutation, 80);
-      });
-
-      mutationObserver.observe(observeRoot, {
-        childList: true,
-        subtree: true,
-        characterData: true,
-        attributes: true,
-        attributeFilter: ['href', 'value', 'style', 'class', 'hidden']
-      });
-    }
-
-    return () => {
-      disposed = true;
-      if (mutationTimer) {
-        timerHost.clearTimeout(mutationTimer);
-      }
-      mutationObserver?.disconnect();
-      window.removeEventListener('storage', this.handleStorageEvent);
-      window.removeEventListener('pageshow', this.handlePageLifecycleEvent);
-      window.removeEventListener('popstate', this.handlePageLifecycleEvent);
-      window.removeEventListener('hashchange', this.handlePageLifecycleEvent);
-    };
-  }
-
-  private bindAspNetEndRequest(): () => void {
-    let disposed = false;
-    let intervalId = 0;
-    let handler: (() => void) | null = null;
-    let manager: PageRequestManagerLike | null = null;
-    const deadline = Date.now() + 8000;
-
-    intervalId = window.setInterval(() => {
-      if (disposed || Date.now() > deadline) {
-        window.clearInterval(intervalId);
-        return;
-      }
-
-      const maybeManager = (getPageWindow() as any).Sys?.WebForms?.PageRequestManager?.getInstance?.() as PageRequestManagerLike | null | undefined;
-      if (!maybeManager) return;
-
-      window.clearInterval(intervalId);
-      manager = maybeManager;
-      handler = this.handlePageLifecycleEvent;
-      manager.add_endRequest(handler);
-    }, 250);
-
-    return () => {
-      disposed = true;
-      if (intervalId) window.clearInterval(intervalId);
-      if (manager && handler) {
-        try {
-          manager.remove_endRequest(handler);
-        } catch {
-          // ignore
-        }
-      }
-    };
-  }
-
-  private getHistoryCacheKey(context: SinPageContext): string {
-    return [
-      context.itemId || 'sem-item',
-      context.historyIdentity?.fingerprint || context.historyUrl || 'sem-historico'
-    ].join('|');
-  }
-
-  private setCachedHistory(cacheKey: string, result: SinHistoryResult): void {
-    this.cache.delete(cacheKey);
-    this.cache.set(cacheKey, result);
-
-    while (this.cache.size > MAX_HISTORY_CACHE_ENTRIES) {
-      const oldestKey = this.cache.keys().next().value;
-      if (oldestKey === undefined) break;
-      this.cache.delete(oldestKey);
     }
   }
 
@@ -1170,15 +657,5 @@ export class SinSidebarApp {
     return totalYellowEvents > 0
       ? `Exibindo ${totalEventos} evento(s) (${totalYellowEvents} com amarelo)`
       : `Exibindo todos os ${totalEventos} evento(s) da SIN`;
-  }
-
-  private purgeStaleCacheEntries(itemId: string | null, keepKey?: string): void {
-    if (!itemId) return;
-    const prefix = `${itemId}|`;
-    for (const key of this.cache.keys()) {
-      if (key.startsWith(prefix) && key !== keepKey) {
-        this.cache.delete(key);
-      }
-    }
   }
 }

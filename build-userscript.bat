@@ -29,8 +29,9 @@ powershell -NoProfile -Command "Set-Clipboard -Value (Get-Content -Raw -Encoding
 if errorlevel 1 exit /b 1
 
 echo Userscript content copied to clipboard from "dist\sin-inline.user.js"
-echo Release bundle ready in "dist\releases"
+echo Dist release artifacts ready in "dist\releases"
 echo Metadata file ready in "dist\sin-inline.meta.js"
 echo Latest manifest ready in "dist\latest.json"
+echo Run "npm run prepare:release" only when you intend to stage the root aliases.
 pause
 endlocal

@@ -4,7 +4,7 @@ Userscript para Klassmatt que mostra o KM Acompanhamento inline na pagina do ite
 
 ## Instalar e testar
 
-Versao atual: `1.0.23`.
+Versao atual: `1.0.24`.
 
 Use este link para instalar ou atualizar o script no Tampermonkey:
 
@@ -21,7 +21,7 @@ Se voce estiver no Chrome e o script nao aparecer na pagina, faca este ajuste no
 4. Feche o Chrome completamente e abra de novo
 5. Volte ao item do Klassmatt e recarregue a pagina
 
-Se a versao instalada no Tampermonkey nao for `1.0.23`, atualize o userscript pelo link acima.
+Se a versao instalada no Tampermonkey nao for `1.0.24`, atualize o userscript pelo link acima.
 
 ## UNSPSC rapido
 
@@ -63,6 +63,9 @@ Se o usuario ja tinha configurado o script antes, o modo `Tudo` / `Amarelos` con
 - `npm ci`
 - `npm test`
 - `npm run build`
+- `npm run validate:release` (confere os artefatos reais em `dist`)
+
+O build escreve somente em `dist`; nao copia para a raiz nem altera releases publicados.
 
 O build gera:
 
@@ -72,6 +75,15 @@ O build gera:
 - `dist/releases/<versao>/sin-inline.user.js`
 - `dist/releases/<versao>/SHA256SUMS.txt`
 
+## Organizacao do codigo
+
+- `src/app.ts`: coordena o painel, preferencias, contexto atual e renderizacao.
+- `src/history-repository.ts`: carrega e valida o historico, filtra por item e controla cache, requisicoes em andamento e cancelamento. Recebe apenas URL, identidade e item, sem referencias a elementos da tela.
+- `src/aspnet.ts`: compartilha uma assinatura tipada do `PageRequestManager` entre painel e UNSPSC, com descoberta limitada e descarte independente dos consumidores.
+- `src/http-errors.ts`: separa codigos e dados de erro das mensagens exibidas.
+- `src/unspsc-quick-fill.ts`: compartilha pesquisa, selecao, fechamento, confirmacao do valor nativo e limpeza entre inicio e retomada; observa os containers relevantes e usa polling apenas na confirmacao do valor.
+- `src/page-lifecycle.ts`: observa mudancas de contexto, storage, navegacao e eventos ASP.NET. Notifica o app por callbacks e remove observers, listeners e timers no encerramento.
+
 ## Publicacao
 
 Fluxo seguro para nova versao:
@@ -79,13 +91,18 @@ Fluxo seguro para nova versao:
 1. Alterar o codigo e testar localmente.
 2. Atualizar a versao em `vite.config.ts`.
 3. Rodar `npm run build`.
-4. Publicar no GitHub Pages:
+4. Rodar `npm run prepare:release` para preparar explicitamente os arquivos na raiz e o release versionado. Isso nao publica no GitHub Pages.
+5. Publicar no GitHub Pages:
    `sin-inline.user.js`
    `sin-inline.meta.js`
    `latest.json`
    `releases/<versao>/sin-inline.user.js`
    `releases/<versao>/SHA256SUMS.txt`
-5. Conferir se o `SHA256SUMS.txt` bate com o artefato versionado publicado.
+6. Conferir se o `SHA256SUMS.txt` bate com o artefato versionado publicado.
+
+A preparacao valida `dist` antes de alterar os destinos. Uma versao existente so e aceita quando seus arquivos sao identicos; conteudo divergente ou release incompleto e rejeitado sem substituir os arquivos existentes. Repetir a preparacao dos mesmos bytes e idempotente. Falhas de escrita tentam restaurar os aliases; se a restauracao falhar, o backup e preservado para recuperacao manual. A preparacao usa exclusao mutua e nao oferece garantia de transacao contra encerramento abrupto do processo.
+
+Se a gravacao de preferencias no navegador falhar, a interface continua usando a escolha nesta sessao da pagina; apos recarregar, ela pode voltar ao ultimo valor persistido.
 
 Repo privado de origem:
 

@@ -87,6 +87,15 @@ async function flush(ms = 0): Promise<void> {
   await Promise.resolve();
 }
 
+async function waitForStatus(message: string): Promise<void> {
+  const deadline = Date.now() + 1500;
+  while (!document.querySelector('[data-role="unspsc-status"]')?.textContent?.includes(message)
+    && Date.now() < deadline) {
+    await flush(10);
+  }
+  expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain(message);
+}
+
 function installModalOnLookup(resultCode = '27112104'): HTMLInputElement {
   const lookup = document.querySelector<HTMLInputElement>('#ibutUNSPSC')!;
   lookup.addEventListener('click', (event) => {
@@ -159,7 +168,7 @@ describe('UnspscQuickFillApp', () => {
     quickInput.value = '27112104';
     quickInput.dispatchEvent(new Event('input', { bubbles: true }));
 
-    await flush(180);
+    await waitForStatus('preenchida');
 
     expect(lookupSpy).toHaveBeenCalledTimes(1);
     expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('27112104. Drill bits');
@@ -188,13 +197,119 @@ describe('UnspscQuickFillApp', () => {
 
     const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 500 });
     app.init();
-    await flush(180);
+    await waitForStatus('preenchida');
 
     expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('27112104. Drill bits');
     expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();
     expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
 
     app.destroy();
+  });
+
+  it.each(['opening', 'searching', 'selecting', 'closing'])(
+    'waits for delayed native application when resuming %s', async (stage) => {
+      vi.useFakeTimers();
+      sessionStorage.setItem('km_unspsc_pending_v1', JSON.stringify({ code: '27112104', stage }));
+      const modal = buildModal();
+      const close = modal.querySelector<HTMLInputElement>('#butFechar')!;
+      const delayedClose = close.cloneNode(true) as HTMLInputElement;
+      close.replaceWith(delayedClose);
+      delayedClose.addEventListener('click', () => {
+        modal.remove();
+        window.setTimeout(() => {
+          document.querySelector<HTMLInputElement>('#txtUNSPSC')!.value = '27112104. Drill bits';
+        }, 80);
+      });
+      document.body.appendChild(modal);
+      const app = new UnspscQuickFillApp({ hookAspNet: false, timeoutMs: 300 });
+
+      try {
+        app.init();
+        await vi.advanceTimersByTimeAsync(40);
+        expect(document.querySelector('#tableUNSPSC')).toBeNull();
+        expect(document.body.classList.contains('km-unspsc-running')).toBe(true);
+        expect(document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')?.disabled).toBe(true);
+
+        await vi.advanceTimersByTimeAsync(120);
+        expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
+        expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();
+        expect(document.body.classList.contains('km-unspsc-running')).toBe(false);
+        expect(document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')?.disabled).toBe(false);
+      } finally {
+        app.destroy();
+        vi.useRealTimers();
+      }
+    }
+  );
+
+  it('cleans up a resumed application timeout and allows another lookup', async () => {
+    vi.useFakeTimers();
+    sessionStorage.setItem('km_unspsc_pending_v1', JSON.stringify({ code: '27112104', stage: 'closing' }));
+    const modal = buildModal();
+    const close = modal.querySelector<HTMLInputElement>('#butFechar')!;
+    const stalledClose = close.cloneNode(true) as HTMLInputElement;
+    close.replaceWith(stalledClose);
+    stalledClose.addEventListener('click', () => modal.remove());
+    document.body.appendChild(modal);
+    installModalOnLookup();
+    const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 100 });
+
+    try {
+      app.init();
+      await vi.advanceTimersByTimeAsync(150);
+      expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('Falha na consulta');
+      expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();
+      expect(document.body.classList.contains('km-unspsc-running')).toBe(false);
+      const input = document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')!;
+      expect(input.disabled).toBe(false);
+
+      input.value = '27112104';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(150);
+      expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
+    } finally {
+      app.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('resumes closing without a modal and waits for a property-only update', async () => {
+    vi.useFakeTimers();
+    sessionStorage.setItem('km_unspsc_pending_v1', JSON.stringify({ code: '27112104', stage: 'closing' }));
+    const app = new UnspscQuickFillApp({ hookAspNet: false, timeoutMs: 300 });
+    try {
+      app.init();
+      expect(document.body.classList.contains('km-unspsc-running')).toBe(true);
+      document.querySelector<HTMLInputElement>('#txtUNSPSC')!.value = '27112104. Drill bits';
+      await vi.advanceTimersByTimeAsync(120);
+      expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
+      expect(sessionStorage.getItem('km_unspsc_pending_v1')).toBeNull();
+      expect(document.body.classList.contains('km-unspsc-running')).toBe(false);
+    } finally {
+      app.destroy();
+      vi.useRealTimers();
+    }
+  });
+
+  it('limits attribute observers to classification containers', async () => {
+    const observe = vi.spyOn(MutationObserver.prototype, 'observe');
+    installModalOnLookup();
+    const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 300 });
+    try {
+      app.init();
+      const input = document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')!;
+      input.value = '27112104';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await waitForStatus('preenchida');
+      expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
+      const broadObservations = observe.mock.calls.filter(([root]) => root === document.body || root === document.documentElement);
+      expect(broadObservations.length).toBeGreaterThan(0);
+      expect(broadObservations.every(([, options]) => options?.attributes !== true)).toBe(true);
+      expect(observe.mock.calls.some(([, options]) => options?.attributes === true)).toBe(true);
+    } finally {
+      app.destroy();
+      observe.mockRestore();
+    }
   });
 
   it('does not start the native flow before eight digits', async () => {
@@ -255,7 +370,7 @@ describe('UnspscQuickFillApp', () => {
     const quickInput = document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')!;
     quickInput.value = '27112104';
     quickInput.dispatchEvent(new Event('input', { bubbles: true }));
-    await flush(80);
+    await waitForStatus('não encontrado');
 
     expect(document.querySelector<HTMLInputElement>('#txtUNSPSC')?.value).toBe('40141607. Ball valves');
     expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('não encontrado');
@@ -279,7 +394,7 @@ describe('UnspscQuickFillApp', () => {
     app.destroy();
   });
 
-  it('settles after one external mutation instead of rescheduling itself forever', async () => {
+  it('ignores unrelated external mutations instead of rescanning classification controls', async () => {
     const app = new UnspscQuickFillApp({ hookAspNet: false });
     app.init();
     const syncSpy = vi.spyOn(app, 'sync');
@@ -287,8 +402,52 @@ describe('UnspscQuickFillApp', () => {
     document.body.appendChild(document.createElement('div'));
     await flush(220);
 
-    expect(syncSpy).toHaveBeenCalledTimes(1);
+    expect(syncSpy).not.toHaveBeenCalled();
     app.destroy();
+  });
+
+  it('does not serialize results HTML while waiting for a native lookup', async () => {
+    installModalOnLookup();
+    const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 300 });
+    app.init();
+    const innerReads = vi.spyOn(Element.prototype, 'innerHTML', 'get');
+    const outerReads = vi.spyOn(Element.prototype, 'outerHTML', 'get');
+    try {
+      const input = document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')!;
+      input.value = '27112104';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await waitForStatus('preenchida');
+      expect(document.querySelector('[data-role="unspsc-status"]')?.textContent).toContain('preenchida');
+      expect(innerReads).not.toHaveBeenCalled();
+      expect(outerReads).not.toHaveBeenCalled();
+    } finally {
+      innerReads.mockRestore();
+      outerReads.mockRestore();
+      app.destroy();
+    }
+  });
+
+  it('cancels all pending waits immediately on destroy', async () => {
+    vi.useFakeTimers();
+    const lookup = document.querySelector<HTMLInputElement>('#ibutUNSPSC')!;
+    lookup.addEventListener('click', event => event.preventDefault());
+    const app = new UnspscQuickFillApp({ hookAspNet: false, autoSubmitDelayMs: 0, timeoutMs: 1000 });
+    try {
+      app.init();
+      const input = document.querySelector<HTMLInputElement>('[data-role="unspsc-code"]')!;
+      input.value = '27112104';
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      await vi.advanceTimersByTimeAsync(1);
+      expect(document.body.classList.contains('km-unspsc-running')).toBe(true);
+      app.destroy();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(document.body.classList.contains('km-unspsc-running')).toBe(false);
+      expect(document.querySelector('[data-km-unspsc-quick="1"]')).toBeNull();
+    } finally {
+      app.destroy();
+      vi.useRealTimers();
+    }
   });
 
   it('removes the quick field when a postback switches to the native code model', async () => {

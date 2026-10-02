@@ -61,6 +61,67 @@ describe('fetchHtml security checks', () => {
       'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355&SomenteLeitura=1'
     )).rejects.toThrow(/origem inesperada/i);
   });
+
+  it('exposes stable metadata for HTTP status failures', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('unauthorized', {
+      status: 401,
+      headers: { 'content-type': 'text/html' }
+    })));
+
+    await expect(fetchHtml(
+      'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355'
+    )).rejects.toMatchObject({
+      code: 'HTTP_STATUS',
+      status: 401
+    });
+  });
+
+  it('exposes stable metadata for unexpected content types', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', {
+      status: 200,
+      headers: { 'content-type': 'application/json' }
+    })));
+
+    await expect(fetchHtml(
+      'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355'
+    )).rejects.toMatchObject({
+      code: 'CONTENT_TYPE',
+      contentType: 'application/json'
+    });
+  });
+
+  it('exposes stable metadata for cross-origin responses', async () => {
+    const arrayBuffer = vi.fn(async () => new TextEncoder().encode('<p>blocked</p>').buffer);
+    vi.stubGlobal('fetch', vi.fn(async () => ({
+      ok: true,
+      headers: new Headers({ 'content-type': 'text/html' }),
+      arrayBuffer,
+      url: 'https://attacker.example/Historico.aspx',
+      redirected: true
+    }) as unknown as Response));
+
+    await expect(fetchHtml(
+      'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355'
+    )).rejects.toMatchObject({
+      code: 'ORIGIN_BLOCKED',
+      origin: 'https://attacker.example'
+    });
+    expect(arrayBuffer).not.toHaveBeenCalled();
+  });
+
+  it('normalizes an unavailable same-origin transport to a network error code', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('browser network wording changed');
+    }));
+    vi.stubGlobal('GM_xmlhttpRequest', undefined);
+
+    await expect(fetchHtml(
+      'https://demo.klassmatt.com.br/Historico.aspx?source=SIN&Id=209355'
+    )).rejects.toMatchObject({
+      code: 'NETWORK',
+      name: 'HttpRequestError'
+    });
+  });
 });
 
 describe('detectKlassmattErrorPage', () => {

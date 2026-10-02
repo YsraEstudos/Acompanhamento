@@ -1,7 +1,7 @@
 import { defineConfig } from 'vite';
 import monkey from 'vite-plugin-monkey';
 
-const version = '1.0.23';
+const version = '1.0.24';
 const installUrl = 'https://ysraestudos.github.io/Acompanhamento/sin-inline.user.js';
 const metaUrl = 'https://ysraestudos.github.io/Acompanhamento/sin-inline.meta.js';
 const downloadUrl = `https://ysraestudos.github.io/Acompanhamento/releases/${version}/sin-inline.user.js`;

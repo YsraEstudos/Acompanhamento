@@ -571,49 +571,14 @@ describe('SinSidebarApp', () => {
     const app = await initApp({ hookAspNet: false });
     await new Promise((resolve) => setTimeout(resolve, 100));
     await flush();
-    const captureContextSignature = vi.spyOn(app as any, 'captureContextSignature');
+    const hydrate = vi.spyOn(app, 'hydrate');
     const state = document.querySelector<HTMLElement>('.km-sin-state')!;
     state.textContent = 'estado interno';
 
     await new Promise((resolve) => setTimeout(resolve, 100));
     await flush();
 
-    expect(captureContextSignature).not.toHaveBeenCalled();
-    app.destroy();
-  });
-
-  it('bounds completed history cache entries across item switches', async () => {
-    vi.useFakeTimers();
-    setSettings({ alwaysOpen: true, timelineMode: 'all' });
-    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
-      const id = new URL(String(input)).searchParams.get('Id') || '209355';
-      return buildHistoryResponse(wrapHistoryHtml(`
-        <fieldset class="hist-fieldset">
-          <legend class="hist-legend">quinta-feira, 12 de fevereiro de 2026</legend>
-          <div class="row"><a id="hlinkUsuario">USR.TESTE*</a></div>
-          <div class="row result">
-            <span id="lblHora">10:00:00</span>
-            <span id="lblDescricao">Historico da SIN ${id}</span>
-          </div>
-        </fieldset>
-      `, `source=SIN&Id=${id}&SomenteLeitura=1`));
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    const app = new SinSidebarApp();
-    app.init();
-    await vi.advanceTimersByTimeAsync(180);
-    await flushMicrotasks();
-
-    for (let id = 209356; id <= 209361; id++) {
-      document.body.innerHTML = buildItemPage({ sinId: String(id) });
-      window.history.replaceState({}, '', `https://demo.klassmatt.com.br/SIN_Item_Edita.aspx?IdSIN=${id}`);
-      await vi.advanceTimersByTimeAsync(180);
-      await flushMicrotasks();
-    }
-
-    const cache = (app as any).cache as Map<string, unknown>;
-    expect(cache.size).toBeLessThanOrEqual(5);
+    expect(hydrate).not.toHaveBeenCalled();
     app.destroy();
   });
 

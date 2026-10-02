@@ -46,8 +46,6 @@ function syncAlwaysOpenMenu(): void {
     };
 
     saveSettings(nextSettings);
-    app?.applySettings(nextSettings);
-    syncAlwaysOpenMenu();
   });
 }
 
